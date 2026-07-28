@@ -1,0 +1,27 @@
+name: aoshi_auto_mobile
+description: A personal assistant automation tool for mobile - Auto builds APK via GitHub Actions
+publish_to: 'none'
+version: 0.1.0+1
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+  flutter: ">=3.22.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  yaml: ^3.1.2
+  flutter_markdown: ^0.6.18+2
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^2.0.0
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/
+  
+  # Enable internationalization (optional)
+  generate: true

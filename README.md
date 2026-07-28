@@ -1,0 +1,121 @@
+# Aoshi Auto Mobile - GitHub 自动化构建仓库
+
+这个仓库包含完整的 Aoshi Auto 移动应用代码，配置了 GitHub Actions 自动构建 APK。
+
+## 🚀 一键获取 APK
+
+### 方式1：使用现有的构建
+1. 访问 [Actions 页面](https://github.com/YOUR_USERNAME/aoshi-auto-mobile/actions)
+2. 点击最新的构建运行记录
+3. 在 "Artifacts" 部分下载 `aoshi-auto-apk`
+4. 传输到手机并安装
+
+### 方式2：触发新构建
+1. Fork 这个仓库到你的账户
+2. 在仓库页面点击 "Actions"
+3. 选择 "Build Android APK" 工作流
+4. 点击 "Run workflow" 手动触发
+5. 等待构建完成，下载 APK
+
+## 📱 应用功能
+
+### 核心特性
+- **DSL 任务定义**：使用 YAML/JSON 描述自动化任务
+- **函数式数据处理**：纯函数组合，不可变数据流
+- **工作流编排**：自动任务依赖解析
+- **完全本地**：无需网络连接，数据隐私保护
+
+### 用户界面
+- **任务管理**：创建、编辑、执行任务
+- **工作流编辑器**：DSL 编辑和可视化
+- **结果查看**：执行结果和数据分析
+- **设置页面**：应用配置管理
+
+## 🛠️ 技术架构
+
+### 技术栈
+- **Flutter 3.22+**：跨平台移动应用框架
+- **Dart 3.0+**：函数式编程语言
+- **函数式设计**：不可变数据 + 纯函数
+- **DSL 驱动**：声明式任务描述
+
+### 项目结构
+```
+lib/
+├── core/          # 核心处理逻辑
+├── ui/pages/     # 页面组件
+├── data/         # 数据层（待完善）
+└── main.dart     # 应用入口
+```
+
+## 🔧 构建配置
+
+### GitHub Actions 工作流
+- 自动检测代码更改
+- 使用 Flutter 稳定版本
+- 构建 Android APK (Release)
+- 自动上传构建产物
+
+### 环境要求
+- Android API 21+ (Android 5.0+)
+- 支持设备：vivo X200, X50 等主流 Android 设备
+
+## 📦 手动构建（可选）
+
+如果需要本地构建：
+
+```bash
+# 克隆仓库
+git clone https://github.com/YOUR_USERNAME/aoshi-auto-mobile.git
+cd aoshi-auto-mobile
+
+# 安装依赖
+flutter pub get
+
+# 构建 APK
+flutter build apk --release
+
+# APK 文件位置
+# build/app/outputs/flutter-apk/app-release.apk
+```
+
+## 🚨 注意事项
+
+### 安装说明
+1. **Android 设备需要允许安装未知来源应用**
+   - 设置 → 安全 → 允许未知来源
+2. **首次启动可能需要授予存储权限**
+3. **所有数据本地存储**，无需网络权限
+
+### 兼容性
+- **最低 Android 版本**：5.0 (API 21)
+- **目标设备**：vivo X200, X50 已验证
+- **屏幕适配**：支持多种屏幕尺寸
+
+## 🔄 更新和维护
+
+### 代码更新
+```bash
+git pull origin main
+flutter pub get
+```
+
+### 功能扩展
+- 在 `lib/core/` 添加新的数据处理函数
+- 在 `lib/ui/pages/` 添加新页面
+- 修改 DSL 解析器支持更多语法
+
+### 问题反馈
+1. 检查 Flutter 版本兼容性
+2. 查看构建日志中的错误信息
+3. 创建 GitHub Issue 描述问题
+
+## 📄 许可证
+
+本项目为个人项目，遵循 MIT 许可证。仅供个人使用和学习。
+
+---
+
+**构建状态**：![Build Android APK](https://github.com/YOUR_USERNAME/aoshi-auto-mobile/actions/workflows/build-android.yml/badge.svg)
+
+**最新 APK**：[点击下载最新构建](https://github.com/YOUR_USERNAME/aoshi-auto-mobile/actions)
