@@ -1,0 +1,62 @@
+name: Build Android APK
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:  # 允许手动触发
+
+jobs:
+  build-android:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+      
+    - name: Setup Java
+      uses: actions/setup-java@v3
+      with:
+        distribution: 'zulu'
+        java-version: '11'
+        
+    - name: Setup Flutter
+      uses: subosito/flutter-action@v2
+      with:
+        flutter-version: '3.22.0'
+        channel: 'stable'
+        
+    - name: Flutter doctor
+      run: flutter doctor -v
+      
+    - name: Get Flutter dependencies
+      run: flutter pub get
+      
+    - name: Check Flutter code
+      run: flutter analyze
+      
+    - name: Build Android APK (Release)
+      run: flutter build apk --release --no-tree-shake-icons
+      
+    - name: Upload APK artifact
+      uses: actions/upload-artifact@v3
+      with:
+        name: aoshi-auto-apk
+        path: build/app/outputs/flutter-apk/app-release.apk
+        retention-days: 7
+        
+    - name: Upload APK to workflow summary
+      run: |
+        echo "## Aoshi Auto APK 构建完成 🎉" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "**构建信息:**" >> $GITHUB_STEP_SUMMARY
+        echo "- Flutter 版本: 3.22.0" >> $GITHUB_STEP_SUMMARY
+        echo "- 构建时间: $(date)" >> $GITHUB_STEP_SUMMARY
+        echo "- APK 文件: [下载](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "**安装说明:**" >> $GITHUB_STEP_SUMMARY
+        echo "1. 点击上方链接下载 APK" >> $GITHUB_STEP_SUMMARY
+        echo "2. 传输到 Android 设备" >> $GITHUB_STEP_SUMMARY
+        echo "3. 允许安装来自未知来源的应用" >> $GITHUB_STEP_SUMMARY
+        echo "4. 安装并运行" >> $GITHUB_STEP_SUMMARY
