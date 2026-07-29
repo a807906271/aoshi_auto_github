@@ -32,6 +32,7 @@ jobs:
         if [ ! -d "android" ]; then
           flutter create --platforms=android --project-name aoshi_auto_mobile .
         fi
+        rm -rf test
         
     - name: Flutter doctor
       run: flutter doctor -v
