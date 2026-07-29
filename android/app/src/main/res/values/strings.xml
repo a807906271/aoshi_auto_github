@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Aoshi Auto</string>
+    <string name="accessibility_service_description">为傲世游戏自动化任务提供无障碍服务支持。仅在用户主动启动自动化时执行点击操作，不会收集或上传任何数据。</string>
+
+</resources>
