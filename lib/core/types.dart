@@ -65,10 +65,8 @@ class SimplePipeline {
   DataItem run(DataItem input) {
     dynamic result = input.content;
     
-    for (var stage in stages) {
-      if (stage is Function) {
-        result = stage(result);
-      }
+    for (final stage in stages) {
+      result = stage(result);
     }
     
     return DataItem(
