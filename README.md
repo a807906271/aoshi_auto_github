@@ -5,7 +5,7 @@
 ## 🚀 一键获取 APK
 
 ### 方式1：使用现有的构建
-1. 访问 [Actions 页面](https://github.com/YOUR_USERNAME/aoshi-auto-mobile/actions)
+1. 访问 [Actions 页面](https://github.com/a807906271/aoshi_auto_github/actions)
 2. 点击最新的构建运行记录
 3. 在 "Artifacts" 部分下载 `aoshi-auto-apk`
 4. 传输到手机并安装
