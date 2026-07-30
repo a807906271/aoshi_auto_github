@@ -30,7 +30,6 @@ class GameFlows(private val context: Context) {
 
     sealed class QiyuPhase {
         object Idle : QiyuPhase()
-        object Start : QiyuPhase()           // 点击"开始奇遇"
         object Enter : QiyuPhase()           // 进入奇遇界面
         object BalanceCounts : QiyuPhase()   // 读取分数和次数
         object Inspect : QiyuPhase()         // 查看宝箱
