@@ -33,6 +33,11 @@ jobs:
           flutter create --platforms=android --project-name aoshi_auto_mobile .
         fi
         rm -rf test
+        cat > android/gradle.properties <<'EOF'
+        org.gradle.jvmargs=-Xmx4G -XX:MaxMetaspaceSize=2G -XX:+HeapDumpOnOutOfMemoryError
+        android.useAndroidX=true
+        android.enableJetifier=true
+        EOF
         
     - name: Flutter doctor
       run: flutter doctor -v
