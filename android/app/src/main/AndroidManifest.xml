@@ -13,7 +13,7 @@
     <application
         android:label="Aoshi Auto"
         android:name="${applicationName}"
-        android:icon="@drawable/launch_background"
+        android:icon="@mipmap/ic_launcher"
         android:allowBackup="false"
         android:theme="@style/LaunchTheme"
         android:usesCleartextTraffic="true">
