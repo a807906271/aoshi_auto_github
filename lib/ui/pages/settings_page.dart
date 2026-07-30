@@ -2,7 +2,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
 import '../../automation/automation_channel.dart';
-import '../../automation/automation_session.dart';
 
 /// 设置页面
 class SettingsPage extends StatefulWidget {

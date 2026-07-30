@@ -1,7 +1,6 @@
 /// 游戏自动化任务页面
 import 'package:flutter/material.dart';
 import '../../automation/automation_session.dart';
-import '../../automation/automation_channel.dart';
 
 /// 游戏自动化任务页面
 class TasksPage extends StatefulWidget {
