@@ -66,7 +66,15 @@ object NodeQuery {
     }
 
     fun clickNearestClickable(node: AccessibilityNodeInfo?): Boolean {
-        return nearestClickable(node)?.performAction(AccessibilityNodeInfo.ACTION_CLICK) ?: false
+        val clickableTarget = nearestClickable(node)
+        if (clickableTarget != null) {
+            return clickableTarget.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+        }
+
+        // 部分游戏只暴露语义文本，未正确标记可点击属性；仅对已命中的语义节点尝试动作。
+        return node?.takeIf { it.isEnabled }
+            ?.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+            ?: false
     }
 
     fun nearestClickableOrSelf(node: AccessibilityNodeInfo?): AccessibilityNodeInfo? {
