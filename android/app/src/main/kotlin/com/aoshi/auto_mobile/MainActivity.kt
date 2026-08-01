@@ -70,15 +70,35 @@ class MainActivity : FlutterActivity() {
                     }
                 }
 
+                // 获取流程状态机目录
+                "getWorkflowSpec" -> {
+                    val service = AoshiAccessibilityService.instance
+                    result.success(service?.getWorkflowSpec() ?: com.aoshi.auto_mobile.automation.GameFlows.workflowSpecJson().toString())
+                }
+
                 // 获取状态
                 "getStatus" -> {
                     val service = AoshiAccessibilityService.instance
                     if (service == null) {
                         result.success(JSONObject().apply {
+                            put("status", "idle")
                             put("isRunning", false)
                             put("currentFlow", "none")
+                            put("lastFlow", JSONObject.NULL)
+                            put("activePhase", "Idle")
                             put("qiyuPhase", "Idle")
                             put("towerPhase", "Idle")
+                            put("stepCount", 0)
+                            put("skippedStepCount", 0)
+                            put("lastEventType", "manual")
+                            put("lastPageLabel", "无服务")
+                            put("lastPageTextSample", "")
+                            put("lastMessage", "无障碍服务未启用")
+                            put("lastError", JSONObject.NULL)
+                            put("lastPageSignature", JSONObject.NULL)
+                            put("lastThrottleReason", JSONObject.NULL)
+                            put("lastElapsedMillis", 0)
+                            put("workflowRuntime", JSONObject())
                         }.toString())
                     } else {
                         result.success(service.getStatus().toString())
