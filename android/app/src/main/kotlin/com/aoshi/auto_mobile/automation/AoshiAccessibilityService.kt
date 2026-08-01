@@ -104,8 +104,9 @@ class AoshiAccessibilityService : AccessibilityService() {
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (!isRunning || event == null) return
+        if (event.packageName?.toString() == packageName) return
 
-        // 只处理前台应用的窗口变化
+        // 只处理前台游戏窗口的变化；本应用的状态页事件不能推进游戏状态机。
         if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED ||
             event.eventType == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED) {
             
