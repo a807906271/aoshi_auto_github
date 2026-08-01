@@ -452,7 +452,7 @@ class AoshiAccessibilityService : AccessibilityService() {
         val pageText = texts.joinToString(" ")
         return when {
             pageText.contains("本局得分") -> "奇遇奖励确认"
-            pageText.contains("开启奇遇") || pageText.contains("开始奇遇") -> "奇遇入口"
+            listOf("天赋奇遇", "天赐奇遇", "天脉奇遇").any(pageText::contains) -> "奇遇入口"
             pageText.contains("算卦") -> "奇遇算卦"
             pageText.contains("查看宝箱") && pageText.contains("开启宝箱") -> "奇遇宝箱选择"
             pageText.contains("宝箱") -> "奇遇宝箱页"

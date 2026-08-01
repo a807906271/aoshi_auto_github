@@ -184,9 +184,10 @@ class GameFlows {
 
         return when {
             currentState is QiyuPhase.WaitStart -> {
-                val isEntryPage = pageText.contains("天赋奇遇") && pageText.contains("奇遇卷轴")
+                val entryTitles = listOf("天赋奇遇", "天赐奇遇", "天脉奇遇")
+                val isEntryPage = entryTitles.any(pageText::contains)
                 if (!isEntryPage || start == null) {
-                    QiyuPhase.WaitStart to "等待天赋奇遇入口与开启按钮"
+                    QiyuPhase.WaitStart to "等待奇遇入口标题与开启按钮"
                 } else if (NodeQuery.clickNearestClickable(start)) {
                     QiyuPhase.EnterDivination to "已点击开启奇遇，等待进入算卦页"
                 } else {
