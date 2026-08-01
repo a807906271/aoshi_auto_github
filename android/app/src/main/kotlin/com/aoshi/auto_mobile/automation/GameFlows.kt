@@ -230,8 +230,9 @@ class GameFlows {
 
             pageText.contains("本局得分") && rewardConfirm != null -> {
                 val parsedRules = parseRules(pageText)
-                val nextObservations = if (qiyu.pendingBoxIndex != null && parsedRules.isNotEmpty()) {
-                    val currentObservation = BoxObservation(qiyu.pendingBoxIndex, parsedRules)
+                val pendingBoxIndex = qiyu.pendingBoxIndex
+                val nextObservations = if (pendingBoxIndex != null && parsedRules.isNotEmpty()) {
+                    val currentObservation = BoxObservation(pendingBoxIndex, parsedRules)
                     (qiyu.observations.filterNot { it.index == currentObservation.index } + currentObservation)
                 } else {
                     qiyu.observations
@@ -241,7 +242,7 @@ class GameFlows {
                     observations = nextObservations,
                     pendingBoxIndex = null,
                     lastDecision = when {
-                        parsedRules.isNotEmpty() && qiyu.pendingBoxIndex != null -> "已记录第 ${qiyu.pendingBoxIndex + 1} 个宝箱规则"
+                        parsedRules.isNotEmpty() && pendingBoxIndex != null -> "已记录第 ${pendingBoxIndex + 1} 个宝箱规则"
                         else -> qiyu.lastDecision
                     },
                 )
@@ -407,7 +408,7 @@ class GameFlows {
             expectedScoreAfterLastOpen = null,
             lastDecision = when {
                 needsReplan -> "实际分数 $observedScore 与预算 $expected 不一致，重新规划剩余宝箱"
-                pendingObservation != null && parsedRules.isNotEmpty -> "已记录第 ${pendingObservation + 1} 个宝箱规则"
+                pendingObservation != null && parsedRules.isNotEmpty() -> "已记录第 ${pendingObservation + 1} 个宝箱规则"
                 else -> qiyu.lastDecision
             },
         )
