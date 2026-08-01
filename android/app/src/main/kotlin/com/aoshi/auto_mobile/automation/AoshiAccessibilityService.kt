@@ -26,6 +26,7 @@ class AoshiAccessibilityService : AccessibilityService() {
         private const val PAGE_SIGNATURE_TEXT_SIZE = 28
         private const val QIYU_ENTRY_TRANSITION_TIMEOUT_MILLIS = 30_000L
         private const val QIYU_DIVINATION_TRANSITION_TIMEOUT_MILLIS = 30_000L
+        private const val FLOW_START_DELAY_MILLIS = 3_000L
 
         // 单例引用，供 MethodChannel 调用
         @Volatile
@@ -71,6 +72,8 @@ class AoshiAccessibilityService : AccessibilityService() {
     private var lastElapsedMillis: Long = 0L
     private var qiyuEntryTransitionDeadlineMillis: Long? = null
     private var qiyuDivinationTransitionDeadlineMillis: Long? = null
+    private var flowStartDeadlineMillis: Long? = null
+    private var delayedFlowStart: Runnable? = null
     private val timeoutHandler = Handler(Looper.getMainLooper())
     private val qiyuEntryTransitionTimeout = Runnable {
         if (isRunning && currentFlow == "qiyu" && qiyuPhase is GameFlows.QiyuPhase.EnterDivination) {
@@ -103,7 +106,7 @@ class AoshiAccessibilityService : AccessibilityService() {
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
-        if (!isRunning || event == null) return
+        if (!isRunning || event == null || flowStartDeadlineMillis != null) return
         if (event.packageName?.toString() == packageName) return
 
         // 只处理前台游戏窗口的变化；本应用的状态页事件不能推进游戏状态机。
@@ -147,12 +150,12 @@ class AoshiAccessibilityService : AccessibilityService() {
         lastStatus = "running"
         isRunning = true
         qiyuPhase = GameFlows.QiyuPhase.WaitStart
-        resetRuntime("奇遇流程已启动", "running")
+        resetRuntime("请在 3 秒内切回游戏，随后开始识别", "running")
         gameFlows.resetQiyu()
 
-        // 立即执行第一步
-        val result = executeCurrentFlow(null)
-        return createResult(true, "奇遇流程已启动", result)
+        // 预留切回游戏前台的时间；准备期间的窗口事件不进入状态机。
+        scheduleFlowStart("qiyu")
+        return createResult(true, "奇遇流程将在 3 秒后开始", getStatus())
     }
 
     /**
@@ -168,11 +171,11 @@ class AoshiAccessibilityService : AccessibilityService() {
         lastStatus = "running"
         isRunning = true
         towerPhase = GameFlows.TowerPhase.ResolveBranch
-        resetRuntime("闯塔流程已启动", "running")
+        resetRuntime("请在 3 秒内切回游戏，随后开始识别", "running")
         gameFlows.resetTower()
 
-        val result = executeCurrentFlow(null)
-        return createResult(true, "闯塔流程已启动", result)
+        scheduleFlowStart("tower")
+        return createResult(true, "闯塔流程将在 3 秒后开始", getStatus())
     }
 
     /**
@@ -204,6 +207,24 @@ class AoshiAccessibilityService : AccessibilityService() {
     }
 
     // ===== 私有方法 =====
+
+    private fun scheduleFlowStart(flow: String) {
+        clearDelayedFlowStart()
+        flowStartDeadlineMillis = System.currentTimeMillis() + FLOW_START_DELAY_MILLIS
+        delayedFlowStart = Runnable {
+            flowStartDeadlineMillis = null
+            delayedFlowStart = null
+            if (isRunning && currentFlow == flow) {
+                executeCurrentFlow(null)
+            }
+        }.also { timeoutHandler.postDelayed(it, FLOW_START_DELAY_MILLIS) }
+    }
+
+    private fun clearDelayedFlowStart() {
+        delayedFlowStart?.let(timeoutHandler::removeCallbacks)
+        delayedFlowStart = null
+        flowStartDeadlineMillis = null
+    }
 
     /**
      * 执行当前流程的一步
@@ -388,6 +409,13 @@ class AoshiAccessibilityService : AccessibilityService() {
             put("lastThrottleReason", lastThrottleReason ?: JSONObject.NULL)
             put("lastElapsedMillis", lastElapsedMillis)
             put(
+                "flowStartRemainingMillis",
+                flowStartDeadlineMillis
+                    ?.minus(System.currentTimeMillis())
+                    ?.coerceAtLeast(0)
+                    ?: JSONObject.NULL,
+            )
+            put(
                 "qiyuEntryTransitionRemainingMillis",
                 qiyuEntryTransitionDeadlineMillis
                     ?.minus(System.currentTimeMillis())
@@ -407,6 +435,7 @@ class AoshiAccessibilityService : AccessibilityService() {
     }
 
     private fun resetRuntime(message: String, status: String) {
+        clearDelayedFlowStart()
         clearQiyuTransitionTimeouts()
         lastStepAtMillis = 0L
         lastPageSignature = null
@@ -502,6 +531,13 @@ class AoshiAccessibilityService : AccessibilityService() {
             put("lastPageSignature", lastPageSignature ?: JSONObject.NULL)
             put("lastThrottleReason", lastThrottleReason ?: JSONObject.NULL)
             put("lastElapsedMillis", lastElapsedMillis)
+            put(
+                "flowStartRemainingMillis",
+                flowStartDeadlineMillis
+                    ?.minus(System.currentTimeMillis())
+                    ?.coerceAtLeast(0)
+                    ?: JSONObject.NULL,
+            )
             put(
                 "qiyuEntryTransitionRemainingMillis",
                 qiyuEntryTransitionDeadlineMillis
