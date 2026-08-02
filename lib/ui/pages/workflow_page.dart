@@ -517,6 +517,22 @@ class _WorkflowPageState extends State<WorkflowPage> {
             line('上次消息', snapshot.message ?? '-'),
             line('执行步数', '${snapshot.stepCount}'),
             line('错误', snapshot.error ?? '-'),
+            if (snapshot.debugCollectedTexts?.isNotEmpty ?? false) ...[
+              const Divider(height: 24),
+              const Text('调试：收集到的文本', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+              const SizedBox(height: 8),
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.grey[100],
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: SelectableText(
+                  snapshot.debugCollectedTexts!,
+                  style: const TextStyle(fontSize: 12, fontFamily: 'monospace'),
+                ),
+              ),
+            ],
             _buildForegroundSnapshotLog(snapshot),
             _buildRuntimePanel(snapshot),
           ],

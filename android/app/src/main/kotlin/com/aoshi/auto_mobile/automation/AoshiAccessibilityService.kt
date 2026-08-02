@@ -79,6 +79,7 @@ class AoshiAccessibilityService : AccessibilityService() {
     private var lastError: String? = null
     private var lastThrottleReason: String? = null
     private var lastElapsedMillis: Long = 0L
+    private var debugCollectedTexts: String = ""
     private var qiyuEntryTransitionDeadlineMillis: Long? = null
     private var qiyuDivinationTransitionDeadlineMillis: Long? = null
     private var targetGamePackageName: String? = null
@@ -473,6 +474,7 @@ class AoshiAccessibilityService : AccessibilityService() {
             put("lastThrottleReason", lastThrottleReason ?: JSONObject.NULL)
             put("lastElapsedMillis", lastElapsedMillis)
             put("foregroundSnapshots", foregroundSnapshotsJson())
+            put("debugCollectedTexts", debugCollectedTexts)
             put(
                 "flowStartRemainingMillis",
                 flowStartDeadlineMillis
@@ -559,6 +561,10 @@ class AoshiAccessibilityService : AccessibilityService() {
         val pageLabel = classifyPage(normalizedTexts)
         val textSignature = normalizedTexts.joinToString("|").hashCode()
         val bounds = NodeQuery.bounds(root)?.let { "${it.left},${it.top},${it.right},${it.bottom}" }.orEmpty()
+        
+        // 保存调试信息，供 Flutter 显示
+        debugCollectedTexts = texts.take(50).joinToString(" | ")
+        
         return PageSnapshot(
             signature = "${currentFlow.orEmpty()}#$pageLabel#$textSignature#$bounds",
             label = pageLabel,
@@ -570,7 +576,7 @@ class AoshiAccessibilityService : AccessibilityService() {
         val pageText = texts.joinToString(" ")
         return when {
             pageText.contains("本局得分") -> "奇遇奖励确认"
-            listOf("天赋奇遇", "天赐奇遇", "天脉奇遇").any(pageText::contains) -> "奇遇入口"
+            listOf("天赋奇遇", "天赐奇遇", "天脉奇遇", "开启奇遇").any(pageText::contains) -> "奇遇入口"
             pageText.contains("算卦") -> "奇遇算卦"
             pageText.contains("查看宝箱") && pageText.contains("开启宝箱") -> "奇遇宝箱选择"
             pageText.contains("宝箱") -> "奇遇宝箱页"
@@ -621,6 +627,7 @@ class AoshiAccessibilityService : AccessibilityService() {
             put("lastThrottleReason", lastThrottleReason ?: JSONObject.NULL)
             put("lastElapsedMillis", lastElapsedMillis)
             put("foregroundSnapshots", foregroundSnapshotsJson())
+            put("debugCollectedTexts", debugCollectedTexts)
             put(
                 "flowStartRemainingMillis",
                 flowStartDeadlineMillis

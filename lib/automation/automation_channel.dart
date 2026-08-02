@@ -129,6 +129,7 @@ class FlowStatus {
   final int elapsedMillis;
   final List<ForegroundSnapshot> foregroundSnapshots;
   final Map<String, dynamic> workflowRuntime;
+  final String? debugCollectedTexts;
 
   const FlowStatus({
     required this.state,
@@ -149,6 +150,7 @@ class FlowStatus {
     this.elapsedMillis = 0,
     this.foregroundSnapshots = const [],
     this.workflowRuntime = const {},
+    this.debugCollectedTexts,
   });
 
   factory FlowStatus.fromMap(Map<String, dynamic> map) {
@@ -180,6 +182,7 @@ class FlowStatus {
           .map(ForegroundSnapshot.fromMap)
           .toList(growable: false),
       workflowRuntime: _asStringMap(map['workflowRuntime']) ?? const {},
+      debugCollectedTexts: _nullableString(map['debugCollectedTexts']),
     );
   }
 
