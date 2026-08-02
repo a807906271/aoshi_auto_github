@@ -7,6 +7,7 @@ import android.os.Handler
 import android.os.Looper
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
+import org.json.JSONArray
 import org.json.JSONObject
 
 /**
@@ -27,6 +28,7 @@ class AoshiAccessibilityService : AccessibilityService() {
         private const val QIYU_ENTRY_TRANSITION_TIMEOUT_MILLIS = 30_000L
         private const val QIYU_DIVINATION_TRANSITION_TIMEOUT_MILLIS = 30_000L
         private const val FLOW_START_DELAY_MILLIS = 3_000L
+        private const val SNAPSHOT_LOG_LIMIT = 3
 
         // 单例引用，供 MethodChannel 调用
         @Volatile
@@ -47,6 +49,13 @@ class AoshiAccessibilityService : AccessibilityService() {
         val signature: String,
         val label: String,
         val textSample: String,
+    )
+
+    private data class ForegroundSnapshot(
+        val packageName: String,
+        val pageLabel: String,
+        val eventType: String,
+        val capturedAtMillis: Long,
     )
 
     // 流程引擎
@@ -72,6 +81,9 @@ class AoshiAccessibilityService : AccessibilityService() {
     private var lastElapsedMillis: Long = 0L
     private var qiyuEntryTransitionDeadlineMillis: Long? = null
     private var qiyuDivinationTransitionDeadlineMillis: Long? = null
+    private var targetGamePackageName: String? = null
+    private var lastActiveWindowPackageName: String? = null
+    private val foregroundSnapshots = mutableListOf<ForegroundSnapshot>()
     private var flowStartDeadlineMillis: Long? = null
     private var delayedFlowStart: Runnable? = null
     private val timeoutHandler = Handler(Looper.getMainLooper())
@@ -108,8 +120,13 @@ class AoshiAccessibilityService : AccessibilityService() {
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (!isRunning || event == null || flowStartDeadlineMillis != null) return
         if (event.packageName?.toString() == packageName) return
+        if (
+            targetGamePackageName != null &&
+            event.packageName?.toString() != null &&
+            event.packageName.toString() != targetGamePackageName
+        ) return
 
-        // 只处理前台游戏窗口的变化；本应用的状态页事件不能推进游戏状态机。
+        // 只处理已锁定游戏窗口的变化；本应用及其他应用的事件不能推进游戏状态机。
         if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED ||
             event.eventType == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED) {
             
@@ -231,9 +248,22 @@ class AoshiAccessibilityService : AccessibilityService() {
      */
     private fun executeCurrentFlow(eventType: Int? = null): JSONObject {
         val root = rootInActiveWindow ?: return createResult(false, "无法获取窗口节点")
+        if (root.packageName?.toString() == packageName) {
+            lastEventType = eventTypeName(eventType)
+            lastMessage = "等待游戏返回前台"
+            return createResult(true, lastMessage)
+        }
+
         val pageSnapshot = createPageSnapshot(root)
         val now = System.currentTimeMillis()
-        lastEventType = eventTypeName(eventType)
+        val eventTypeName = eventTypeName(eventType)
+        recordForegroundSnapshot(
+            packageName = root.packageName?.toString(),
+            pageLabel = pageSnapshot.label,
+            eventType = eventTypeName,
+            capturedAtMillis = now,
+        )
+        lastEventType = eventTypeName
         lastPageLabel = pageSnapshot.label
         lastPageTextSample = pageSnapshot.textSample
 
@@ -389,6 +419,40 @@ class AoshiAccessibilityService : AccessibilityService() {
         notifyStatus("failed", reason)
     }
 
+    private fun recordForegroundSnapshot(
+        packageName: String?,
+        pageLabel: String,
+        eventType: String,
+        capturedAtMillis: Long,
+    ) {
+        val activePackageName = packageName ?: return
+        if (activePackageName == lastActiveWindowPackageName) return
+
+        lastActiveWindowPackageName = activePackageName
+        foregroundSnapshots += ForegroundSnapshot(
+            packageName = activePackageName,
+            pageLabel = pageLabel,
+            eventType = eventType,
+            capturedAtMillis = capturedAtMillis,
+        )
+        if (foregroundSnapshots.size > SNAPSHOT_LOG_LIMIT) {
+            foregroundSnapshots.removeAt(0)
+        }
+    }
+
+    private fun foregroundSnapshotsJson(): JSONArray {
+        return JSONArray().apply {
+            foregroundSnapshots.forEach { snapshot ->
+                put(JSONObject().apply {
+                    put("packageName", snapshot.packageName)
+                    put("pageLabel", snapshot.pageLabel)
+                    put("eventType", snapshot.eventType)
+                    put("capturedAtMillis", snapshot.capturedAtMillis)
+                })
+            }
+        }
+    }
+
     private fun createStatusSnapshot(): JSONObject {
         return JSONObject().apply {
             put("status", lastStatus)
@@ -396,8 +460,8 @@ class AoshiAccessibilityService : AccessibilityService() {
             put("currentFlow", currentFlow ?: "none")
             put("lastFlow", lastFlow ?: JSONObject.NULL)
             put("activePhase", activePhaseName())
-            put("qiyuPhase", qiyuPhase.javaClass.simpleName)
-            put("towerPhase", towerPhase.javaClass.simpleName)
+            put("qiyuPhase", qiyuPhaseName())
+            put("towerPhase", towerPhaseName())
             put("stepCount", stepCount)
             put("skippedStepCount", skippedStepCount)
             put("lastEventType", lastEventType)
@@ -408,6 +472,7 @@ class AoshiAccessibilityService : AccessibilityService() {
             put("lastPageSignature", lastPageSignature ?: JSONObject.NULL)
             put("lastThrottleReason", lastThrottleReason ?: JSONObject.NULL)
             put("lastElapsedMillis", lastElapsedMillis)
+            put("foregroundSnapshots", foregroundSnapshotsJson())
             put(
                 "flowStartRemainingMillis",
                 flowStartDeadlineMillis
@@ -428,10 +493,32 @@ class AoshiAccessibilityService : AccessibilityService() {
 
     private fun activePhaseName(): String {
         return when (currentFlow ?: lastFlow) {
-            "qiyu" -> qiyuPhase.javaClass.simpleName
-            "tower" -> towerPhase.javaClass.simpleName
+            "qiyu" -> qiyuPhaseName()
+            "tower" -> towerPhaseName()
             else -> "Idle"
         }
+    }
+
+    private fun qiyuPhaseName(): String = when (qiyuPhase) {
+        GameFlows.QiyuPhase.WaitStart -> "WaitStart"
+        GameFlows.QiyuPhase.EnterDivination -> "EnterDivination"
+        GameFlows.QiyuPhase.SelectBox -> "SelectBox"
+        GameFlows.QiyuPhase.InspectBoxes -> "InspectBoxes"
+        GameFlows.QiyuPhase.OpenBest -> "OpenBest"
+        GameFlows.QiyuPhase.FinishRound -> "FinishRound"
+        GameFlows.QiyuPhase.ConfirmReward -> "ConfirmReward"
+        is GameFlows.QiyuPhase.Failed -> "Failed"
+    }
+
+    private fun towerPhaseName(): String = when (towerPhase) {
+        GameFlows.TowerPhase.ResolveBranch -> "ResolveBranch"
+        GameFlows.TowerPhase.EnterBattle -> "EnterBattle"
+        GameFlows.TowerPhase.ChooseBuff -> "ChooseBuff"
+        GameFlows.TowerPhase.RevealSkip -> "RevealSkip"
+        GameFlows.TowerPhase.SkipBattle -> "SkipBattle"
+        GameFlows.TowerPhase.ConfirmSkip -> "ConfirmSkip"
+        GameFlows.TowerPhase.Done -> "Done"
+        is GameFlows.TowerPhase.Failed -> "Failed"
     }
 
     private fun resetRuntime(message: String, status: String) {
@@ -441,6 +528,8 @@ class AoshiAccessibilityService : AccessibilityService() {
         lastPageSignature = null
         lastPageLabel = "未知页面"
         lastPageTextSample = ""
+        lastActiveWindowPackageName = null
+        foregroundSnapshots.clear()
         lastEventType = "manual"
         skippedStepCount = 0
         stepCount = 0
@@ -519,8 +608,8 @@ class AoshiAccessibilityService : AccessibilityService() {
             put("currentFlow", currentFlow ?: "none")
             put("lastFlow", lastFlow ?: JSONObject.NULL)
             put("activePhase", activePhaseName())
-            put("qiyuPhase", qiyuPhase.javaClass.simpleName)
-            put("towerPhase", towerPhase.javaClass.simpleName)
+            put("qiyuPhase", qiyuPhaseName())
+            put("towerPhase", towerPhaseName())
             put("stepCount", stepCount)
             put("skippedStepCount", skippedStepCount)
             put("lastEventType", lastEventType)
@@ -531,6 +620,7 @@ class AoshiAccessibilityService : AccessibilityService() {
             put("lastPageSignature", lastPageSignature ?: JSONObject.NULL)
             put("lastThrottleReason", lastThrottleReason ?: JSONObject.NULL)
             put("lastElapsedMillis", lastElapsedMillis)
+            put("foregroundSnapshots", foregroundSnapshotsJson())
             put(
                 "flowStartRemainingMillis",
                 flowStartDeadlineMillis

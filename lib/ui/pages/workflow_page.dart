@@ -445,6 +445,38 @@ class _WorkflowPageState extends State<WorkflowPage> {
     );
   }
 
+  Widget _buildForegroundSnapshotLog(FlowStatus snapshot) {
+    final entries = snapshot.foregroundSnapshots;
+    if (entries.isEmpty) return const SizedBox.shrink();
+
+    String formatTime(int capturedAtMillis) {
+      final time = DateTime.fromMillisecondsSinceEpoch(capturedAtMillis);
+      String pad(int value) => value.toString().padLeft(2, '0');
+      return '${pad(time.hour)}:${pad(time.minute)}:${pad(time.second)}';
+    }
+
+    return Padding(
+      padding: const EdgeInsets.only(top: 4),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text('最近前台切换', style: TextStyle(fontWeight: FontWeight.w600)),
+          const SizedBox(height: 8),
+          ...entries.reversed.map(
+            (entry) => Padding(
+              padding: const EdgeInsets.only(bottom: 6),
+              child: Text(
+                '${formatTime(entry.capturedAtMillis)}  ${entry.packageName}\n'
+                '页面：${entry.pageLabel ?? '未知页面'} · 来源：${entry.eventType ?? '-'}',
+                style: TextStyle(color: Colors.grey[700], fontSize: 12),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildSnapshotPanel() {
     final snapshot = _snapshot;
     if (snapshot == null) {
@@ -481,16 +513,11 @@ class _WorkflowPageState extends State<WorkflowPage> {
             line('状态', _stateLabel(snapshot.state)),
             line('当前流程', _flowLabel(snapshot.visibleFlow)),
             line('活动阶段', snapshot.activePhase ?? 'Idle'),
-            line('上次消息', snapshot.message ?? '-'),
             line('识别页面', snapshot.pageLabel ?? '-'),
-            line('事件来源', snapshot.lastEventType ?? '-'),
+            line('上次消息', snapshot.message ?? '-'),
             line('执行步数', '${snapshot.stepCount}'),
-            line('节流次数', '${snapshot.skippedStepCount}'),
-            line('节流原因', snapshot.throttleReason ?? '-'),
-            line('上次间隔', '${snapshot.elapsedMillis} ms'),
-            line('页面摘要', snapshot.pageTextSample?.isNotEmpty == true ? snapshot.pageTextSample! : '-'),
             line('错误', snapshot.error ?? '-'),
-            line('页面签名', snapshot.pageSignature ?? '-'),
+            _buildForegroundSnapshotLog(snapshot),
             _buildRuntimePanel(snapshot),
           ],
         ),

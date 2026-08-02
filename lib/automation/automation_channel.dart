@@ -80,6 +80,35 @@ Map<String, dynamic>? _asStringMap(Object? value) {
   return null;
 }
 
+class ForegroundSnapshot {
+  final String packageName;
+  final String? pageLabel;
+  final String? eventType;
+  final int capturedAtMillis;
+
+  const ForegroundSnapshot({
+    required this.packageName,
+    this.pageLabel,
+    this.eventType,
+    required this.capturedAtMillis,
+  });
+
+  factory ForegroundSnapshot.fromMap(Map<String, dynamic> map) {
+    return ForegroundSnapshot(
+      packageName: map['packageName'] as String? ?? '未知应用',
+      pageLabel: _nullableString(map['pageLabel']),
+      eventType: _nullableString(map['eventType']),
+      capturedAtMillis: map['capturedAtMillis'] as int? ?? 0,
+    );
+  }
+}
+
+String? _nullableString(Object? value) {
+  if (value == null) return null;
+  final text = value.toString();
+  return text == 'null' ? null : text;
+}
+
 /// 流程状态数据
 class FlowStatus {
   final AutomationState state;
@@ -98,6 +127,7 @@ class FlowStatus {
   final String? pageSignature;
   final String? throttleReason;
   final int elapsedMillis;
+  final List<ForegroundSnapshot> foregroundSnapshots;
   final Map<String, dynamic> workflowRuntime;
 
   const FlowStatus({
@@ -117,6 +147,7 @@ class FlowStatus {
     this.pageSignature,
     this.throttleReason,
     this.elapsedMillis = 0,
+    this.foregroundSnapshots = const [],
     this.workflowRuntime = const {},
   });
 
@@ -143,6 +174,11 @@ class FlowStatus {
       pageSignature: _nullableString(map['lastPageSignature']),
       throttleReason: _nullableString(map['lastThrottleReason']),
       elapsedMillis: map['lastElapsedMillis'] as int? ?? 0,
+      foregroundSnapshots: _asList(map['foregroundSnapshots'])
+          .map(_asStringMap)
+          .whereType<Map<String, dynamic>>()
+          .map(ForegroundSnapshot.fromMap)
+          .toList(growable: false),
       workflowRuntime: _asStringMap(map['workflowRuntime']) ?? const {},
     );
   }
