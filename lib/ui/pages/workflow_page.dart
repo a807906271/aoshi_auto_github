@@ -388,6 +388,11 @@ class _WorkflowPageState extends State<WorkflowPage> {
     if (runtime.isEmpty) return const SizedBox.shrink();
 
     final decision = runtime['lastDecision']?.toString();
+    final currentScore = runtime['currentScore']?.toString();
+    final viewRemaining = runtime['viewRemaining']?.toString();
+    final openRemaining = runtime['openRemaining']?.toString();
+    final openingOrder = runtime['openingOrder'];
+    final rawOcr = runtime['rawOcr']?.toString();
     final observations = runtime['observations'];
     final candidates = runtime['candidates'];
     final avoided = runtime['avoided'];
@@ -416,8 +421,11 @@ class _WorkflowPageState extends State<WorkflowPage> {
         ? observations.map((item) {
             final map = item is Map ? item : const {};
             final label = map['label']?.toString() ?? '宝箱';
-            final rules = map['rules'] is List ? (map['rules'] as List).join('，') : '-';
-            return '$label：$rules';
+            final rules = map['rules'] is List
+                ? (map['rules'] as List).join('，')
+                : map['rule']?.toString() ?? '-';
+            final raw = map['rawText']?.toString();
+            return raw == null ? '$label：$rules' : '$label：$rules（OCR：$raw）';
           }).toList(growable: false)
         : const <String>[];
 
@@ -437,7 +445,24 @@ class _WorkflowPageState extends State<WorkflowPage> {
             const SizedBox(height: 8),
             Text(decision, style: const TextStyle(fontWeight: FontWeight.w500)),
           ],
+          if (currentScore != null && currentScore != 'null') ...[
+            const SizedBox(height: 8),
+            Text(
+              '当前分数：$currentScore · 查看剩余：${viewRemaining ?? '-'} · 开启剩余：${openRemaining ?? '-'}',
+              style: const TextStyle(fontSize: 12),
+            ),
+          ],
+          if (openingOrder is List && openingOrder.isNotEmpty) ...[
+            const SizedBox(height: 4),
+            Text('最优开启顺序：${openingOrder.join(' → ')}', style: const TextStyle(fontSize: 12)),
+          ],
           textList('奇遇宝箱观测', observationLines),
+          if (rawOcr != null && rawOcr.isNotEmpty && rawOcr != 'null') ...[
+            const SizedBox(height: 10),
+            const Text('截图 OCR 原文', style: TextStyle(fontWeight: FontWeight.w600)),
+            const SizedBox(height: 4),
+            SelectableText(rawOcr, style: const TextStyle(fontSize: 11, fontFamily: 'monospace')),
+          ],
           textList('闯塔候选加成', candidates is List ? candidates : const []),
           textList('已排除项', avoided is List ? avoided : const []),
         ],

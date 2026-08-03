@@ -60,6 +60,7 @@ class AoshiAccessibilityService : AccessibilityService() {
 
     // 流程引擎
     private lateinit var gameFlows: GameFlows
+    private var qiyuCoordinateAutomation: QiyuCoordinateAutomation? = null
     
     // 当前状态
     private var qiyuPhase: GameFlows.QiyuPhase = GameFlows.QiyuPhase.WaitStart
@@ -120,6 +121,7 @@ class AoshiAccessibilityService : AccessibilityService() {
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (!isRunning || event == null || flowStartDeadlineMillis != null) return
+        if (currentFlow == "qiyu") return
         if (event.packageName?.toString() == packageName) return
         if (
             targetGamePackageName != null &&
@@ -168,8 +170,20 @@ class AoshiAccessibilityService : AccessibilityService() {
         lastStatus = "running"
         isRunning = true
         qiyuPhase = GameFlows.QiyuPhase.WaitStart
-        resetRuntime("请在 3 秒内切回游戏，随后开始识别", "running")
+        resetRuntime("请在 3 秒内切回游戏的奇遇入口，随后开始截图识别", "running")
         gameFlows.resetQiyu()
+        qiyuCoordinateAutomation?.stop()
+        qiyuCoordinateAutomation = QiyuCoordinateAutomation(
+            service = this,
+            onStatus = { runtime ->
+                qiyuPhase = toQiyuPhase(runtime.stage)
+                lastMessage = runtime.message
+                lastStatus = "running"
+                lastError = null
+                notifyStatus("running", runtime.message)
+            },
+            onFailure = { reason -> failQiyu(reason) },
+        )
 
         // 预留切回游戏前台的时间；准备期间的窗口事件不进入状态机。
         scheduleFlowStart("qiyu")
@@ -200,6 +214,8 @@ class AoshiAccessibilityService : AccessibilityService() {
      * 停止当前流程
      */
     fun stopFlow(): JSONObject {
+        qiyuCoordinateAutomation?.stop()
+        qiyuCoordinateAutomation = null
         isRunning = false
         currentFlow = null
         lastStatus = "idle"
@@ -233,7 +249,11 @@ class AoshiAccessibilityService : AccessibilityService() {
             flowStartDeadlineMillis = null
             delayedFlowStart = null
             if (isRunning && currentFlow == flow) {
-                executeCurrentFlow(null)
+                if (flow == "qiyu") {
+                    qiyuCoordinateAutomation?.start()
+                } else {
+                    executeCurrentFlow(null)
+                }
             }
         }.also { timeoutHandler.postDelayed(it, FLOW_START_DELAY_MILLIS) }
     }
@@ -410,6 +430,8 @@ class AoshiAccessibilityService : AccessibilityService() {
     }
 
     private fun failQiyu(reason: String) {
+        qiyuCoordinateAutomation?.stop()
+        qiyuCoordinateAutomation = null
         clearQiyuTransitionTimeouts()
         qiyuPhase = GameFlows.QiyuPhase.Failed(reason)
         isRunning = false
@@ -489,7 +511,7 @@ class AoshiAccessibilityService : AccessibilityService() {
                     ?.coerceAtLeast(0)
                     ?: JSONObject.NULL,
             )
-            put("workflowRuntime", gameFlows.runtimeJson(currentFlow ?: lastFlow))
+            put("workflowRuntime", qiyuRuntimeJson())
         }
     }
 
@@ -499,6 +521,22 @@ class AoshiAccessibilityService : AccessibilityService() {
             "tower" -> towerPhaseName()
             else -> "Idle"
         }
+    }
+
+    private fun toQiyuPhase(stage: QiyuCoordinateAutomation.Stage): GameFlows.QiyuPhase = when (stage) {
+        QiyuCoordinateAutomation.Stage.ENTRY -> GameFlows.QiyuPhase.WaitStart
+        QiyuCoordinateAutomation.Stage.DIVINATION -> GameFlows.QiyuPhase.EnterDivination
+        QiyuCoordinateAutomation.Stage.CHESTS,
+        QiyuCoordinateAutomation.Stage.SELECT_INSPECT -> GameFlows.QiyuPhase.SelectBox
+        QiyuCoordinateAutomation.Stage.WAIT_INSPECT -> GameFlows.QiyuPhase.InspectBoxes
+        QiyuCoordinateAutomation.Stage.SELECT_OPEN,
+        QiyuCoordinateAutomation.Stage.WAIT_OPEN -> GameFlows.QiyuPhase.OpenBest
+        QiyuCoordinateAutomation.Stage.WAIT_SETTLEMENT -> GameFlows.QiyuPhase.ConfirmReward
+        QiyuCoordinateAutomation.Stage.FAILED -> GameFlows.QiyuPhase.Failed("截图流程失败")
+    }
+
+    private fun qiyuRuntimeJson(): JSONObject {
+        return qiyuCoordinateAutomation?.runtimeJson() ?: gameFlows.runtimeJson(currentFlow ?: lastFlow)
     }
 
     private fun qiyuPhaseName(): String = when (qiyuPhase) {
@@ -642,7 +680,7 @@ class AoshiAccessibilityService : AccessibilityService() {
                     ?.coerceAtLeast(0)
                     ?: JSONObject.NULL,
             )
-            put("workflowRuntime", gameFlows.runtimeJson(currentFlow ?: lastFlow))
+            put("workflowRuntime", qiyuRuntimeJson())
             extra?.let { put("extra", it) }
         }
     }
