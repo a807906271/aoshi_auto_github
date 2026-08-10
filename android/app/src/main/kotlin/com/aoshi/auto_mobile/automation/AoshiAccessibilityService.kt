@@ -107,16 +107,14 @@ class AoshiAccessibilityService : AccessibilityService() {
         super.onServiceConnected()
         instance = this
         gameFlows = GameFlows()
-        
-        // 配置服务信息
-        val info = AccessibilityServiceInfo().apply {
+
+        // 在系统已加载的 ServiceInfo 基础上补充运行时配置，
+        // 保留 manifest 中的 canTakeScreenshot / canRetrieveWindowContent / settingsActivity。
+        serviceInfo = serviceInfo.apply {
             eventTypes = AccessibilityEvent.TYPES_ALL_MASK
-            feedbackType = AccessibilityServiceInfo.FEEDBACK_GENERIC
-            flags = AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS or
-                    AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS
+            flags = flags or AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS
             notificationTimeout = 100
         }
-        serviceInfo = info
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
