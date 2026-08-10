@@ -63,7 +63,7 @@ object QiyuCoordinateProfile {
 sealed class QiyuRule(val raw: String, val display: String) {
     class Add(raw: String, val amount: BigInteger) : QiyuRule(raw, "+$amount")
     class Multiply(raw: String, val multiplier: BigDecimal) : QiyuRule(raw, "×${multiplier.stripTrailingZeros().toPlainString()}")
-    class Replace(raw: String, val value: BigInteger) : QiyuRule(raw, "被$value替换")
+    class Replace(raw: String, val value: BigInteger) : QiyuRule(raw, "被${value}替换")
     class ReplaceOneWithNine(raw: String) : QiyuRule(raw, "1被9替换")
     class ConditionalAdd(raw: String, val odd: Boolean, val amount: BigInteger) : QiyuRule(raw, "${if (odd) "奇" else "偶"}数+$amount")
     class ConditionalMultiply(raw: String, val odd: Boolean, val multiplier: BigDecimal) : QiyuRule(raw, "${if (odd) "奇" else "偶"}数×${multiplier.stripTrailingZeros().toPlainString()}")
