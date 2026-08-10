@@ -533,6 +533,7 @@ class AoshiAccessibilityService : AccessibilityService() {
         QiyuCoordinateAutomation.Stage.WAIT_OPEN -> GameFlows.QiyuPhase.OpenBest
         QiyuCoordinateAutomation.Stage.WAIT_SETTLEMENT -> GameFlows.QiyuPhase.ConfirmReward
         QiyuCoordinateAutomation.Stage.FAILED -> GameFlows.QiyuPhase.Failed("截图流程失败")
+        else -> GameFlows.QiyuPhase.WaitStart
     }
 
     private fun qiyuRuntimeJson(): JSONObject {
@@ -548,6 +549,7 @@ class AoshiAccessibilityService : AccessibilityService() {
         GameFlows.QiyuPhase.FinishRound -> "FinishRound"
         GameFlows.QiyuPhase.ConfirmReward -> "ConfirmReward"
         is GameFlows.QiyuPhase.Failed -> "Failed"
+        else -> "Idle"
     }
 
     private fun towerPhaseName(): String = when (towerPhase) {
@@ -559,6 +561,7 @@ class AoshiAccessibilityService : AccessibilityService() {
         GameFlows.TowerPhase.ConfirmSkip -> "ConfirmSkip"
         GameFlows.TowerPhase.Done -> "Done"
         is GameFlows.TowerPhase.Failed -> "Failed"
+        else -> "Idle"
     }
 
     private fun resetRuntime(message: String, status: String) {
