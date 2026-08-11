@@ -8,6 +8,7 @@ import android.hardware.HardwareBuffer
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.util.Log
 import android.view.Display
 import com.google.android.gms.tasks.Tasks
 import com.google.mlkit.vision.common.InputImage
@@ -153,6 +154,10 @@ class QiyuCoordinateAutomation(
     private val onStatus: (Runtime) -> Unit,
     private val onFailure: (String) -> Unit,
 ) {
+    companion object {
+        private const val TAG = "QiyuAuto"
+    }
+
     enum class Stage { ENTRY, DIVINATION, CHESTS, SELECT_INSPECT, WAIT_INSPECT, SELECT_OPEN, WAIT_OPEN, WAIT_SETTLEMENT, FAILED }
 
     data class ChestResult(val index: Int, val rawText: String, val rule: QiyuRule?)
@@ -223,6 +228,7 @@ class QiyuCoordinateAutomation(
             fail("系统版本低于 Android 11，无法通过无障碍服务获取截图")
             return
         }
+        Log.d(TAG, "requestFrame: stage=${runtime.stage} 取图中")
         captureQueued = true
         service.takeScreenshot(Display.DEFAULT_DISPLAY, service.mainExecutor,
             object : AccessibilityService.TakeScreenshotCallback {
@@ -231,10 +237,17 @@ class QiyuCoordinateAutomation(
                     val buffer = screenshot.hardwareBuffer
                     val bitmap = Bitmap.wrapHardwareBuffer(buffer, screenshot.colorSpace)?.copy(Bitmap.Config.ARGB_8888, false)
                     buffer.close()
-                    if (bitmap == null) fail("截图转换失败") else recognize(bitmap)
+                    if (bitmap == null) {
+                        Log.e(TAG, "onSuccess 但 Bitmap.wrapHardwareBuffer 失败")
+                        fail("截图转换失败")
+                    } else {
+                        Log.d(TAG, "截图成功 ${bitmap.width}x${bitmap.height}")
+                        recognize(bitmap)
+                    }
                 }
                 override fun onFailure(errorCode: Int) {
                     captureQueued = false
+                    Log.e(TAG, "takeScreenshot onFailure: errorCode=$errorCode")
                     fail("无法获取游戏截图，错误码 $errorCode；请确认无障碍服务已授予截图能力")
                 }
             },
@@ -390,6 +403,7 @@ class QiyuCoordinateAutomation(
         val gesture = GestureDescription.Builder().addStroke(stroke).build()
         val accepted = service.dispatchGesture(gesture, object : AccessibilityService.GestureResultCallback() {
             override fun onCompleted(gestureDescription: GestureDescription?) {
+                Log.d(TAG, "tap onCompleted: stage=$nextStage")
                 val deadline = System.currentTimeMillis() + 30_000L
                 val next = if (nextStage == Stage.ENTRY && completedRounds > runtime.completedRounds) {
                     Runtime(

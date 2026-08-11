@@ -5,6 +5,7 @@ import android.accessibilityservice.AccessibilityServiceInfo
 import android.content.Intent
 import android.os.Handler
 import android.os.Looper
+import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import org.json.JSONArray
@@ -21,6 +22,7 @@ import org.json.JSONObject
 class AoshiAccessibilityService : AccessibilityService() {
 
     companion object {
+        private const val TAG = "AoshiA11y"
         private const val STEP_INTERVAL_MILLIS = 650L
         private const val SAME_PAGE_INTERVAL_MILLIS = 1800L
         private const val PAGE_TEXT_SAMPLE_SIZE = 18
@@ -105,6 +107,7 @@ class AoshiAccessibilityService : AccessibilityService() {
 
     override fun onServiceConnected() {
         super.onServiceConnected()
+        Log.i(TAG, "onServiceConnected: 服务已连接")
         instance = this
         gameFlows = GameFlows()
 
@@ -118,11 +121,24 @@ class AoshiAccessibilityService : AccessibilityService() {
         // 必须显式提交，否则系统仍然按 manifest 的旧 ServiceInfo 运行：
         // - takeScreenshot() 在 Android 14 上会因为 serviceInfo 没刷新而 onFailure
         // - FLAG_REPORT_VIEW_IDS、TYPES_ALL_MASK 等运行时叠加不会生效
-        setServiceInfo(serviceInfo)
+        try {
+            setServiceInfo(serviceInfo)
+            Log.i(
+                TAG,
+                "setServiceInfo ok: eventTypes=0x${Integer.toHexString(serviceInfo.eventTypes)}, " +
+                    "flags=0x${Integer.toHexString(serviceInfo.flags)}, " +
+                    "timeout=${serviceInfo.notificationTimeout}, " +
+                    "canTakeScreenshot=${serviceInfo.canTakeScreenshot()}",
+            )
+        } catch (t: Throwable) {
+            Log.e(TAG, "setServiceInfo failed", t)
+        }
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
-        if (!isRunning || event == null || flowStartDeadlineMillis != null) return
+        if (event == null) return
+        Log.d(TAG, "onAccessibilityEvent: type=${event.eventType} pkg=${event.packageName} flow=$currentFlow isRunning=$isRunning")
+        if (!isRunning || flowStartDeadlineMillis != null) return
         if (currentFlow == "qiyu") return
         if (event.packageName?.toString() == packageName) return
         if (
@@ -166,7 +182,7 @@ class AoshiAccessibilityService : AccessibilityService() {
         if (isRunning) {
             return createResult(false, "已有流程在运行中")
         }
-
+        Log.i(TAG, "startQiyu: 用户请求启动奇遇流程")
         currentFlow = "qiyu"
         lastFlow = "qiyu"
         lastStatus = "running"
@@ -199,7 +215,7 @@ class AoshiAccessibilityService : AccessibilityService() {
         if (isRunning) {
             return createResult(false, "已有流程在运行中")
         }
-
+        Log.i(TAG, "startTower: 用户请求启动闯塔流程")
         currentFlow = "tower"
         lastFlow = "tower"
         lastStatus = "running"
