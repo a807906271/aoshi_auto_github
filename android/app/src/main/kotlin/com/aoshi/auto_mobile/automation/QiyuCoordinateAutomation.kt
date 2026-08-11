@@ -38,12 +38,14 @@ object QiyuCoordinateProfile {
         }
     }
 
-    val start = Point(0.470, 0.849)
-    val divination = Point(0.498, 0.654)
-    val inspect = Point(0.304, 0.898)
-    val open = Point(0.697, 0.898)
-    val finish = Point(0.500, 0.952)
-    val confirm = Point(0.502, 0.729)
+    // 点击目标坐标。已与 p1/p2 标注对齐：start / inspect / open / slots 维持原值，
+    // finish / confirm / divination / R2L 区域按 p2 红框校准。
+    val start = Point(0.470, 0.849)             // 开启奇遇（p2 红框一致）
+    val divination = Point(0.498, 0.500)        // 算卦（p2 红框在中央太极图中部，校正自 0.654）
+    val inspect = Point(0.304, 0.898)           // 查看宝箱
+    val open = Point(0.697, 0.898)              // 开启宝箱
+    val finish = Point(0.860, 0.300)            // 完成（p2 黑框在右上角，校正自 (0.500, 0.952)）
+    val confirm = Point(0.502, 0.770)           // 确定（p2 红框偏下，校正自 0.729）
 
     val score = Region(176.0 / 460, 454.0 / 1024, 292.0 / 460, 545.0 / 1024)
     val viewCount = Region(52.0 / 460, 880.0 / 1024, 190.0 / 460, 960.0 / 1024)
@@ -52,11 +54,13 @@ object QiyuCoordinateProfile {
         Point(0.239, 0.698), Point(0.484, 0.698), Point(0.750, 0.698),
         Point(0.333, 0.790), Point(0.511, 0.790),
     )
+    // 规则 OCR 区域，每个矩形覆盖对应 slot 正下方的规则文字。
+    // R2L 横向中心 121.5px 偏离 slot[3]=153px 约 31px，已校准为 105..200。
     val ruleRegions = listOf(
         Region(67.0 / 460, 727.0 / 1024, 153.0 / 460, 763.0 / 1024),
         Region(182.0 / 460, 725.0 / 1024, 263.0 / 460, 763.0 / 1024),
         Region(294.0 / 460, 725.0 / 1024, 396.0 / 460, 763.0 / 1024),
-        Region(67.0 / 460, 823.0 / 1024, 176.0 / 460, 855.0 / 1024),
+        Region(105.0 / 460, 823.0 / 1024, 200.0 / 460, 855.0 / 1024),
         Region(181.0 / 460, 823.0 / 1024, 290.0 / 460, 855.0 / 1024),
     )
 }
@@ -295,11 +299,33 @@ class QiyuCoordinateAutomation(
     private enum class Page { ENTRY, DIVINATION, CHESTS, SETTLEMENT, UNKNOWN }
     private fun detectPage(frame: Frame): Page {
         val text = frame.fullText.replace(Regex("\\s"), "")
+
+        // 第一层：区域强信号。入口页 viewCount/openCount 区域为空，
+        // CHESTS 页这两个区域必有 N/M 计数（如 "4/4"），SETTLEMENT 弹框期间也会看到 "0/0"。
+        val chestCounter = Regex("\\d+\\s*/\\s*\\d+")
+        val hasChestCounter = chestCounter.containsMatchIn(frame.viewText) ||
+                              chestCounter.containsMatchIn(frame.openText)
+        val hasScore = parseScore(frame.scoreText) != null
+
+        // 第二层：全屏 OCR 容错关键词集合（每页独有强信号优先于共享弱信号）
+        val isSettlementText = text.contains("本局得分") ||
+                               (text.contains("确定") && text.contains("奖励"))
+        val isEntryText = text.contains("开启奇遇") || text.contains("天赋奇遇") ||
+                          text.contains("奇遇秘宝") || text.contains("奇遇卷轴") ||
+                          text.contains("奇遇入口") || text.contains("天脉奇遇")
+        val isDivinationText = text.contains("算卦") || text.contains("占卜")
+
+        // 第三层：阶段判定。按特异度从高到低，避免入口页"奇遇秘宝"被误判为 CHESTS。
+        // 阶段迁移白名单由 consume() 里 when (runtime.stage) 强约束，无需在此重复。
         return when {
-            text.contains("开启奇遇") || text.contains("天赋奇遇") -> Page.ENTRY
-            text.contains("算卦") -> Page.DIVINATION
-            text.contains("本局得分") || text.contains("确定") && text.contains("奖励") -> Page.SETTLEMENT
-            parseScore(frame.scoreText) != null && (text.contains("查看") || text.contains("宝箱")) -> Page.CHESTS
+            // SETTLEMENT 独有 "本局得分"，且弹框覆盖当前分数/规则区域
+            isSettlementText -> Page.SETTLEMENT
+            // CHESTS：区域强信号 + score 数字双重确认
+            hasChestCounter && hasScore -> Page.CHESTS
+            // ENTRY：关键词命中 + 没有 CHESTS 强信号（双重否定杜绝入口页误识别为 CHESTS）
+            isEntryText && !hasChestCounter -> Page.ENTRY
+            // DIVINATION：唯一特征是"算卦"
+            isDivinationText -> Page.DIVINATION
             else -> Page.UNKNOWN
         }
     }
