@@ -95,3 +95,4 @@ coverage/
 *.swp
 *.*~
 /evidence
+/app-release.apk

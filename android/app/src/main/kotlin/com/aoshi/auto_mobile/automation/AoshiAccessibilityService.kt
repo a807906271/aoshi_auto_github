@@ -115,6 +115,10 @@ class AoshiAccessibilityService : AccessibilityService() {
             flags = flags or AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS
             notificationTimeout = 100
         }
+        // 必须显式提交，否则系统仍然按 manifest 的旧 ServiceInfo 运行：
+        // - takeScreenshot() 在 Android 14 上会因为 serviceInfo 没刷新而 onFailure
+        // - FLAG_REPORT_VIEW_IDS、TYPES_ALL_MASK 等运行时叠加不会生效
+        setServiceInfo(serviceInfo)
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
