@@ -123,12 +123,20 @@ class AoshiAccessibilityService : AccessibilityService() {
         // - FLAG_REPORT_VIEW_IDS、TYPES_ALL_MASK 等运行时叠加不会生效
         try {
             setServiceInfo(serviceInfo)
+            // canTakeScreenshot 这个 Kotlin 属性来自 API 34；
+            // 用反射读取，避开 compileSdk 绑定，避免 CI 在老 Flutter 上 unresolved。
+            val canTakeScreenshot = try {
+                val m = AccessibilityServiceInfo::class.java.getMethod("getCanTakeScreenshot")
+                (m.invoke(serviceInfo) as? Boolean) ?: false
+            } catch (_: Throwable) {
+                false
+            }
             Log.i(
                 TAG,
                 "setServiceInfo ok: eventTypes=0x${Integer.toHexString(serviceInfo.eventTypes)}, " +
                     "flags=0x${Integer.toHexString(serviceInfo.flags)}, " +
                     "timeout=${serviceInfo.notificationTimeout}, " +
-                    "canTakeScreenshot=${serviceInfo.canTakeScreenshot()}",
+                    "canTakeScreenshot=$canTakeScreenshot",
             )
         } catch (t: Throwable) {
             Log.e(TAG, "setServiceInfo failed", t)

@@ -24,7 +24,10 @@ if (flutterVersionName == null) {
 
 android {
     namespace = "com.aoshi.auto_mobile"
-    compileSdk = flutter.compileSdkVersion
+    // 显式钉死 compileSdk / targetSdk，避免被 Flutter SDK 默认值带回 33。
+    // 关键 API 依赖：AccessibilityServiceInfo.canTakeScreenshot 来自 API 34，
+    // 项目目标机也是 vivo X200（Android 14），把基线对齐到 34。
+    compileSdk = 34
     ndkVersion = flutter.ndkVersion
 
     compileOptions {
@@ -38,8 +41,10 @@ android {
 
     defaultConfig {
         applicationId = "com.aoshi.auto_mobile"
-        minSdk = flutter.minSdkVersion
-        targetSdk = flutter.targetSdkVersion
+        // minSdk 不能低于 26：AccessibilityService.dispatchGesture 从 API 26 起完整可用，
+        // takeScreenshot 还需要 API 30+，但编译期只需要 ≥ 26 即可。
+        minSdk = maxOf(flutter.minSdkVersion, 26)
+        targetSdk = 34
         versionCode = flutterVersionCode.toInteger()
         versionName = flutterVersionName
     }
