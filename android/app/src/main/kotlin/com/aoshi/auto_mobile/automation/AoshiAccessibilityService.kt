@@ -228,6 +228,7 @@ class AoshiAccessibilityService : AccessibilityService() {
         lastStatus = "running"
         isRunning = true
         qiyuPhase = GameFlows.QiyuPhase.WaitStart
+        targetGamePackageName = "com.tencent.JWX"  // 设置目标游戏包名（傲世西游）
         resetRuntime("请立即切换到游戏的奇遇入口界面，4秒后自动开始识别", "running")
         gameFlows.resetQiyu()
         qiyuCoordinateAutomation?.stop()
@@ -245,6 +246,7 @@ class AoshiAccessibilityService : AccessibilityService() {
 
         // 预留切回游戏前台的时间；准备期间的窗口事件不进入状态机。
         scheduleFlowStart("qiyu")
+        Log.i(TAG, "startQiyu: 目标游戏包名已设置为 $targetGamePackageName")
         return createResult(true, "奇遇流程将在 3 秒后开始", getStatus())
     }
 
@@ -261,10 +263,12 @@ class AoshiAccessibilityService : AccessibilityService() {
         lastStatus = "running"
         isRunning = true
         towerPhase = GameFlows.TowerPhase.ResolveBranch
+        targetGamePackageName = "com.tencent.JWX"  // 设置目标游戏包名（傲世西游）
         resetRuntime("请在 3 秒内切回游戏，随后开始识别", "running")
         gameFlows.resetTower()
 
         scheduleFlowStart("tower")
+        Log.i(TAG, "startTower: 目标游戏包名已设置为 $targetGamePackageName")
         return createResult(true, "闯塔流程将在 3 秒后开始", getStatus())
     }
 
@@ -277,6 +281,7 @@ class AoshiAccessibilityService : AccessibilityService() {
         isRunning = false
         currentFlow = null
         lastStatus = "idle"
+        targetGamePackageName = null  // 清除目标游戏包名
         qiyuPhase = GameFlows.QiyuPhase.WaitStart
         towerPhase = GameFlows.TowerPhase.ResolveBranch
         
