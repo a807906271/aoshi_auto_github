@@ -31,6 +31,7 @@ class AoshiAccessibilityService : AccessibilityService() {
         private const val QIYU_DIVINATION_TRANSITION_TIMEOUT_MILLIS = 30_000L
         private const val FLOW_START_DELAY_MILLIS = 3_000L
         private const val SNAPSHOT_LOG_LIMIT = 3
+        private const val FOCUS_LOSS_TOLERANCE_MILLIS = 2_000L  // 焦点丢失容忍时间
 
         // 单例引用，供 MethodChannel 调用
         @Volatile
@@ -90,6 +91,8 @@ class AoshiAccessibilityService : AccessibilityService() {
     private val foregroundSnapshots = mutableListOf<ForegroundSnapshot>()
     private var flowStartDeadlineMillis: Long? = null
     private var delayedFlowStart: Runnable? = null
+    private var focusLossDetectedAtMillis: Long? = null
+    private var delayedFocusLossStop: Runnable? = null
     private val timeoutHandler = Handler(Looper.getMainLooper())
     private val qiyuEntryTransitionTimeout = Runnable {
         if (isRunning && currentFlow == "qiyu" && qiyuPhase is GameFlows.QiyuPhase.EnterDivination) {
@@ -149,11 +152,40 @@ class AoshiAccessibilityService : AccessibilityService() {
         if (!isRunning || flowStartDeadlineMillis != null) return
         if (currentFlow == "qiyu") return
         if (event.packageName?.toString() == packageName) return
+        
+        val eventPackageName = event.packageName?.toString()
+        
+        // 焦点丢失容忍机制
         if (
             targetGamePackageName != null &&
-            event.packageName?.toString() != null &&
-            event.packageName.toString() != targetGamePackageName
-        ) return
+            eventPackageName != null &&
+            eventPackageName != targetGamePackageName
+        ) {
+            // 检测到焦点离开目标应用
+            if (focusLossDetectedAtMillis == null) {
+                // 首次检测到焦点丢失，记录时间并启动延时停止
+                focusLossDetectedAtMillis = System.currentTimeMillis()
+                Log.w(TAG, "onAccessibilityEvent: 检测到焦点离开目标应用 pkg=$eventPackageName target=$targetGamePackageName, 将在 ${FOCUS_LOSS_TOLERANCE_MILLIS}ms 后停止流程")
+                
+                delayedFocusLossStop = Runnable {
+                    if (isRunning && focusLossDetectedAtMillis != null) {
+                        Log.e(TAG, "onAccessibilityEvent: 焦点丢失超时，停止流程")
+                        stopFlow()
+                    }
+                }
+                timeoutHandler.postDelayed(delayedFocusLossStop!!, FOCUS_LOSS_TOLERANCE_MILLIS)
+            }
+            return
+        }
+        
+        // 焦点切回目标应用，取消延时停止
+        if (focusLossDetectedAtMillis != null) {
+            val lostDuration = System.currentTimeMillis() - focusLossDetectedAtMillis!!
+            Log.i(TAG, "onAccessibilityEvent: 焦点已切回目标应用 pkg=$eventPackageName, 焦点丢失时长=${lostDuration}ms")
+            delayedFocusLossStop?.let { timeoutHandler.removeCallbacks(it) }
+            focusLossDetectedAtMillis = null
+            delayedFocusLossStop = null
+        }
 
         // 只处理已锁定游戏窗口的变化；本应用及其他应用的事件不能推进游戏状态机。
         if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED ||
@@ -196,7 +228,7 @@ class AoshiAccessibilityService : AccessibilityService() {
         lastStatus = "running"
         isRunning = true
         qiyuPhase = GameFlows.QiyuPhase.WaitStart
-        resetRuntime("请在 3 秒内切回游戏的奇遇入口，随后开始截图识别", "running")
+        resetRuntime("请立即切换到游戏的奇遇入口界面，4秒后自动开始识别", "running")
         gameFlows.resetQiyu()
         qiyuCoordinateAutomation?.stop()
         qiyuCoordinateAutomation = QiyuCoordinateAutomation(
@@ -247,6 +279,12 @@ class AoshiAccessibilityService : AccessibilityService() {
         lastStatus = "idle"
         qiyuPhase = GameFlows.QiyuPhase.WaitStart
         towerPhase = GameFlows.TowerPhase.ResolveBranch
+        
+        // 清理焦点丢失相关状态
+        delayedFocusLossStop?.let { timeoutHandler.removeCallbacks(it) }
+        focusLossDetectedAtMillis = null
+        delayedFocusLossStop = null
+        
         resetRuntime("流程已停止", "idle")
 
         return createResult(true, "流程已停止")
@@ -276,7 +314,14 @@ class AoshiAccessibilityService : AccessibilityService() {
             delayedFlowStart = null
             if (isRunning && currentFlow == flow) {
                 if (flow == "qiyu") {
-                    qiyuCoordinateAutomation?.start()
+                    // 奇遇流程：再等待1秒确保游戏界面稳定后再开始截图
+                    lastMessage = "等待游戏界面稳定..."
+                    notifyStatus("running", lastMessage)
+                    timeoutHandler.postDelayed({
+                        if (isRunning && currentFlow == "qiyu") {
+                            qiyuCoordinateAutomation?.start()
+                        }
+                    }, 1000)
                 } else {
                     executeCurrentFlow(null)
                 }
@@ -288,6 +333,11 @@ class AoshiAccessibilityService : AccessibilityService() {
         delayedFlowStart?.let(timeoutHandler::removeCallbacks)
         delayedFlowStart = null
         flowStartDeadlineMillis = null
+        
+        // 同时清理焦点丢失检测状态
+        delayedFocusLossStop?.let { timeoutHandler.removeCallbacks(it) }
+        focusLossDetectedAtMillis = null
+        delayedFocusLossStop = null
     }
 
     /**

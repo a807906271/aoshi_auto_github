@@ -186,6 +186,8 @@ class QiyuCoordinateAutomation(
     private var captureQueued = false
     private var actionDeadline: Runnable? = null
     private var expectedScore: BigInteger? = null
+    private var screenshotRetryCount = 0
+    private val maxScreenshotRetries = 3
 
     fun start() = requestFrame()
 
@@ -238,6 +240,7 @@ class QiyuCoordinateAutomation(
             object : AccessibilityService.TakeScreenshotCallback {
                 override fun onSuccess(screenshot: AccessibilityService.ScreenshotResult) {
                     captureQueued = false
+                    screenshotRetryCount = 0  // 成功后重置重试计数
                     val buffer = screenshot.hardwareBuffer
                     val bitmap = Bitmap.wrapHardwareBuffer(buffer, screenshot.colorSpace)?.copy(Bitmap.Config.ARGB_8888, false)
                     buffer.close()
@@ -251,8 +254,20 @@ class QiyuCoordinateAutomation(
                 }
                 override fun onFailure(errorCode: Int) {
                     captureQueued = false
-                    Log.e(TAG, "takeScreenshot onFailure: errorCode=$errorCode")
-                    fail("无法获取游戏截图，错误码 $errorCode；请确认无障碍服务已授予截图能力")
+                    Log.e(TAG, "takeScreenshot onFailure: errorCode=$errorCode retryCount=$screenshotRetryCount")
+                    
+                    // 截图失败时重试，而不是立即终止流程
+                    if (screenshotRetryCount < maxScreenshotRetries) {
+                        screenshotRetryCount++
+                        Log.w(TAG, "截图失败，${500 * screenshotRetryCount}ms 后重试 ($screenshotRetryCount/$maxScreenshotRetries)")
+                        handler.postDelayed({
+                            if (runtime.stage != Stage.FAILED) {
+                                requestFrame()
+                            }
+                        }, 500L * screenshotRetryCount)
+                    } else {
+                        fail("无法获取游戏截图，错误码 $errorCode；请确认无障碍服务已授予截图能力且游戏在前台")
+                    }
                 }
             },
         )
