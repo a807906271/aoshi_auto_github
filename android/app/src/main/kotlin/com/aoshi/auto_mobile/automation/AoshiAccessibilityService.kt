@@ -150,7 +150,8 @@ class AoshiAccessibilityService : AccessibilityService() {
         if (event == null) return
         Log.d(TAG, "onAccessibilityEvent: type=${event.eventType} pkg=${event.packageName} flow=$currentFlow isRunning=$isRunning")
         if (!isRunning || flowStartDeadlineMillis != null) return
-        if (currentFlow == "qiyu") return
+        // 奇遇流程使用坐标自动化，不依赖无障碍事件驱动状态机
+        // 但仍需要焦点丢失检测，所以不在此处 return
         if (event.packageName?.toString() == packageName) return
         
         val eventPackageName = event.packageName?.toString()
@@ -186,6 +187,9 @@ class AoshiAccessibilityService : AccessibilityService() {
             focusLossDetectedAtMillis = null
             delayedFocusLossStop = null
         }
+
+        // 奇遇流程使用坐标自动化，不依赖事件驱动状态机
+        if (currentFlow == "qiyu") return
 
         // 只处理已锁定游戏窗口的变化；本应用及其他应用的事件不能推进游戏状态机。
         if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED ||
