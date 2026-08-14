@@ -300,7 +300,7 @@ class QiyuCoordinateAutomation(
             bitmap.recycle()
             val texts = values.map { it.text }
             Log.d(TAG, "recognize: OCR 完成，全屏=${texts[0].replace(Regex("\\s+"), "").take(80)}")
-            Log.d(TAG, "recognize: 文本块坐标=" + texts[0].textBlocks.take(60).joinToString(" | ") { b ->
+            Log.d(TAG, "recognize: 文本块坐标=" + values[0].textBlocks.take(60).joinToString(" | ") { b ->
                 val r = b.boundingBox
                 "${b.text.replace(Regex("\\s+"), "")}@[${r?.left},${r?.top}-${r?.right},${r?.bottom}]"
             })
