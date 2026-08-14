@@ -42,30 +42,31 @@ object QiyuCoordinateProfile {
     // finish / confirm / divination / R2L 区域按 p2 红框校准。
     val start = Point(0.470, 0.849)             // 开启奇遇（p2 红框一致）
     val divination = Point(0.498, 0.580)        // 算卦（用户实测 adb tap 627 1624 有效，y 自 0.500 下移 0.08）
-    val inspect = Point(0.304, 0.898)           // 查看宝箱
-    val open = Point(0.697, 0.898)              // 开启宝箱
-    val finish = Point(0.860, 0.300)            // 完成（p2 黑框在右上角，校正自 (0.500, 0.952)）
-    val confirm = Point(0.502, 0.770)           // 确定（p2 红框偏下，校正自 0.729）
+    val inspect = Point(0.297, 0.894)           // 查看宝箱
+    val open = Point(0.691, 0.894)              // 开启宝箱
+    val finish = Point(0.839, 0.300)            // 完成
+    val confirm = Point(0.503, 0.739)           // 确定（结算弹框）
 
-    // 宝箱页分数区域：实测"当前分数"文字块在 [505,947-759,1021]（归一化 x0.40-0.60 y0.34-0.36），
-    // 数字紧随其后。原区域 y 454-545/1024 是入口页布局，与宝箱页完全错位，已重新校准。
-    val score = Region(175.0 / 460, 330.0 / 1024, 365.0 / 460, 400.0 / 1024)
-    // 底部计数区域：宝箱页实测"刻余次数3/利余次数3"（"剩余次数"误识别）在 y 2595-2670（0.927-0.954），
-    // 原 y 上限 960/1024=0.9375 会裁掉数字行尾，放宽到 985/1024。
-    val viewCount = Region(52.0 / 460, 880.0 / 1024, 190.0 / 460, 985.0 / 1024)
-    val openCount = Region(250.0 / 460, 880.0 / 1024, 430.0 / 460, 985.0 / 1024)
+    // 宝箱页分数区域：实测"当前分数"文字块在顶部标题下，数字（金色大字）在文字正下方。
+    // 数字横向范围宽（大分数如"273550分"需留足空间），纵向覆盖数字高度。
+    val score = Region(75.0 / 460, 452.0 / 1024, 363.0 / 460, 534.0 / 1024)
+    // 底部计数区域：宝箱页实测"剩余次数3"（OCR 常误识别"刻余次数3/利余次数3"）
+    // 在底部按钮上方，只需覆盖数字区域（文字"剩余次数"不重要，parseCount 容错）。
+    val viewCount = Region(171.0 / 460, 947.0 / 1024, 189.0 / 460, 975.0 / 1024)
+    val openCount = Region(348.0 / 460, 947.0 / 1024, 366.0 / 460, 975.0 / 1024)
     val slots = listOf(
-        Point(0.239, 0.698), Point(0.484, 0.698), Point(0.750, 0.698),
-        Point(0.333, 0.790), Point(0.511, 0.790),
+        Point(0.240, 0.689), Point(0.492, 0.689), Point(0.734, 0.689),
+        Point(0.240, 0.781), Point(0.492, 0.781),
     )
     // 规则 OCR 区域，每个矩形覆盖对应 slot 正下方的规则文字。
-    // R2L 横向中心 121.5px 偏离 slot[3]=153px 约 31px，已校准为 105..200。
+    // 实测：规则区顶部距槽位中心约 69-76px，宽约 253-255px，高 45-56px。
+    // 为覆盖各种规则文字（"+10"、"奇数×1.5"等），统一宽 260px 高 60px。
     val ruleRegions = listOf(
-        Region(67.0 / 460, 727.0 / 1024, 153.0 / 460, 763.0 / 1024),
-        Region(182.0 / 460, 725.0 / 1024, 263.0 / 460, 763.0 / 1024),
-        Region(294.0 / 460, 725.0 / 1024, 396.0 / 460, 763.0 / 1024),
-        Region(105.0 / 460, 823.0 / 1024, 200.0 / 460, 855.0 / 1024),
-        Region(181.0 / 460, 823.0 / 1024, 290.0 / 460, 855.0 / 1024),
+        Region(172.0 / 460, 1998.0 / 1024, 432.0 / 460, 2058.0 / 1024),  // slot[0] 下方
+        Region(490.0 / 460, 1998.0 / 1024, 750.0 / 460, 2058.0 / 1024),  // slot[1] 下方
+        Region(795.0 / 460, 1998.0 / 1024, 1055.0 / 460, 2058.0 / 1024), // slot[2] 下方
+        Region(172.0 / 460, 2264.0 / 1024, 432.0 / 460, 2324.0 / 1024),  // slot[3] 下方
+        Region(490.0 / 460, 2264.0 / 1024, 750.0 / 460, 2324.0 / 1024),  // slot[4] 下方
     )
 }
 
@@ -344,9 +345,9 @@ class QiyuCoordinateAutomation(
 
     private fun consume(frame: Frame) {
         val page = detectPage(frame)
-        // 宝箱页分数只认分数区域裁剪 OCR：全屏 fallback 会把"剩余次数3"误当成分数（实测 score=3）
-        val regionScore = parseScore(frame.scoreText)
-        val score = regionScore ?: if (runtime.stage == Stage.CHESTS) null else parseScore(frame.fullText)
+        // 分数只认宝箱页"当前分数"下方的数字。入口/算卦页分数与奇遇流程无关（实测入口 OCR
+        // 会误抓"目标分数823800"），一律忽略；全屏 fallback 会把"剩余次数3"误当成分数，禁用。
+        val score = if (page == Page.CHESTS) parseScore(frame.scoreText) else null
         val viewCount = parseCount(frame.viewText, "查看") ?: parseCount(frame.fullText, "查看")
         val openCount = parseCount(frame.openText, "开启") ?: parseCount(frame.fullText, "开启")
         Log.d(TAG, "consume: stage=${runtime.stage} page=$page score=$score viewRemaining=$viewCount openRemaining=$openCount")
