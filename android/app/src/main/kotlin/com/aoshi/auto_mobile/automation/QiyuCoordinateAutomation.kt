@@ -41,15 +41,19 @@ object QiyuCoordinateProfile {
     // 点击目标坐标。已与 p1/p2 标注对齐：start / inspect / open / slots 维持原值，
     // finish / confirm / divination / R2L 区域按 p2 红框校准。
     val start = Point(0.470, 0.849)             // 开启奇遇（p2 红框一致）
-    val divination = Point(0.498, 0.500)        // 算卦（p2 红框在中央太极图中部，校正自 0.654）
+    val divination = Point(0.498, 0.580)        // 算卦（用户实测 adb tap 627 1624 有效，y 自 0.500 下移 0.08）
     val inspect = Point(0.304, 0.898)           // 查看宝箱
     val open = Point(0.697, 0.898)              // 开启宝箱
     val finish = Point(0.860, 0.300)            // 完成（p2 黑框在右上角，校正自 (0.500, 0.952)）
     val confirm = Point(0.502, 0.770)           // 确定（p2 红框偏下，校正自 0.729）
 
-    val score = Region(176.0 / 460, 454.0 / 1024, 292.0 / 460, 545.0 / 1024)
-    val viewCount = Region(52.0 / 460, 880.0 / 1024, 190.0 / 460, 960.0 / 1024)
-    val openCount = Region(250.0 / 460, 880.0 / 1024, 430.0 / 460, 960.0 / 1024)
+    // 宝箱页分数区域：实测"当前分数"文字块在 [505,947-759,1021]（归一化 x0.40-0.60 y0.34-0.36），
+    // 数字紧随其后。原区域 y 454-545/1024 是入口页布局，与宝箱页完全错位，已重新校准。
+    val score = Region(175.0 / 460, 330.0 / 1024, 365.0 / 460, 400.0 / 1024)
+    // 底部计数区域：宝箱页实测"刻余次数3/利余次数3"（"剩余次数"误识别）在 y 2595-2670（0.927-0.954），
+    // 原 y 上限 960/1024=0.9375 会裁掉数字行尾，放宽到 985/1024。
+    val viewCount = Region(52.0 / 460, 880.0 / 1024, 190.0 / 460, 985.0 / 1024)
+    val openCount = Region(250.0 / 460, 880.0 / 1024, 430.0 / 460, 985.0 / 1024)
     val slots = listOf(
         Point(0.239, 0.698), Point(0.484, 0.698), Point(0.750, 0.698),
         Point(0.333, 0.790), Point(0.511, 0.790),
@@ -340,7 +344,9 @@ class QiyuCoordinateAutomation(
 
     private fun consume(frame: Frame) {
         val page = detectPage(frame)
-        val score = parseScore(frame.scoreText) ?: parseScore(frame.fullText)
+        // 宝箱页分数只认分数区域裁剪 OCR：全屏 fallback 会把"剩余次数3"误当成分数（实测 score=3）
+        val regionScore = parseScore(frame.scoreText)
+        val score = regionScore ?: if (runtime.stage == Stage.CHESTS) null else parseScore(frame.fullText)
         val viewCount = parseCount(frame.viewText, "查看") ?: parseCount(frame.fullText, "查看")
         val openCount = parseCount(frame.openText, "开启") ?: parseCount(frame.fullText, "开启")
         Log.d(TAG, "consume: stage=${runtime.stage} page=$page score=$score viewRemaining=$viewCount openRemaining=$openCount")
@@ -356,6 +362,12 @@ class QiyuCoordinateAutomation(
                 page == Page.CHESTS && base.score != null && base.viewRemaining != null && base.openRemaining != null -> {
                     divinationRetryCount = 0
                     handleChestPage(base, frame)
+                }
+                // 宝箱页已识别但计数/分数未解析出（OCR 波动）：等待重截，30 秒 deadline 兜底
+                page == Page.CHESTS -> {
+                    divinationRetryCount = 0
+                    update(base.copy(message = "宝箱页数据解析中（分数/剩余次数未读到），等待后重截"))
+                    handler.postDelayed({ requestFrame() }, 800L)
                 }
                 // 点击太极图后仍停在算卦页：算卦动画未结束，或点击被入场动画吞掉。
                 // 先等待重截（动画常见 1~3 秒），连续 3 次仍无效则重试点击太极图。
@@ -382,8 +394,8 @@ class QiyuCoordinateAutomation(
     private fun detectPage(frame: Frame): Page {
         val text = frame.fullText.replace(Regex("\\s"), "")
 
-        // 第一层：区域强信号。入口页 viewCount/openCount 区域为空，
-        // CHESTS 页这两个区域必有 N/M 计数（如 "4/4"），SETTLEMENT 弹框期间也会看到 "0/0"。
+        // 第一层：区域强信号。入口页 viewCount/openCount 区域为空，CHESTS 页这两个区域必有计数，
+        // 但实测为"剩余次数N"格式（OCR 常误识别"刻余次数3/利余次数3"），不是 N/M，仅作辅助。
         val chestCounter = Regex("\\d+\\s*/\\s*\\d+")
         val hasChestCounter = chestCounter.containsMatchIn(frame.viewText) ||
                               chestCounter.containsMatchIn(frame.openText)
@@ -395,17 +407,22 @@ class QiyuCoordinateAutomation(
         val isEntryText = text.contains("开启奇遇") || text.contains("天赋奇遇") ||
                           text.contains("奇遇秘宝") || text.contains("奇遇卷轴") ||
                           text.contains("奇遇入口") || text.contains("天脉奇遇")
+        // CHESTS 独有强信号：底部"查看宝箱"+"开启宝箱"按钮同屏（OCR 识别稳定）。
+        // 优先级高于共享的"奇遇"标题弱信号，避免宝箱页误判为算卦页。
+        val hasChestButtons = text.contains("查看宝箱") && text.contains("开启宝箱")
         // DIVINATION 弱信号：页面顶部"奇遇"标题常被 OCR 误识别（实测输出"奇週"）。
-        // 用排除法确认页面归属后即可盲点中央太极图，后续由 CHESTS 页强信号兜底验证。
+        // 用排除法确认页面归属后即可盲点中央太极图；宝箱页同有"奇遇"标题，必须排除。
         val isDivinationText = text.contains("算卦") || text.contains("占卜") ||
-            (text.contains("奇") && !hasChestCounter && !isSettlementText && !isEntryText)
+            (text.contains("奇") && !hasChestButtons && !hasChestCounter && !isSettlementText && !isEntryText)
 
         // 第三层：阶段判定。按特异度从高到低，避免入口页"奇遇秘宝"被误判为 CHESTS。
         // 阶段迁移白名单由 consume() 里 when (runtime.stage) 强约束，无需在此重复。
         return when {
             // SETTLEMENT 独有 "本局得分"，且弹框覆盖当前分数/规则区域
             isSettlementText -> Page.SETTLEMENT
-            // CHESTS：区域强信号 + score 数字双重确认
+            // CHESTS：底部按钮组合（实测计数为"剩余次数N"而非 N/M，区域计数信号不可靠）
+            hasChestButtons -> Page.CHESTS
+            // CHESTS 次选：区域计数 N/M + score 数字（老布局兜底）
             hasChestCounter && hasScore -> Page.CHESTS
             // ENTRY：关键词命中 + 没有 CHESTS 强信号（双重否定杜绝入口页误识别为 CHESTS）
             isEntryText && !hasChestCounter -> Page.ENTRY
