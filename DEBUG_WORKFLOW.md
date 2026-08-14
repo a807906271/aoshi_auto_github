@@ -1,5 +1,43 @@
 # Android 无障碍服务调试流程规范
 
+## 协作规范与边界（必读）
+
+### 1. 打包与发布
+- 应用打包通过 **git push 触发 GitHub Actions CI** 完成（`.github/workflows/build-android.yml`）。
+- **AI 不参与打包**：推送、触发 CI、安装 APK 等由开发者自行操作。
+- 调试排障时，AI 只负责代码修改与日志分析；每次代码变更后的验证闭环依赖开发者的 push → 打包 → 安装。
+
+### 2. adb 调试协作模式
+- **AI 没有真机/adb 直接访问权限**，无法执行 `adb` 命令，也不会读取设备侧数据。
+- 固定协作流程：
+  1. **AI 提供**一条或多条 `adb` 命令（PowerShell 环境）
+  2. **开发者执行**，将终端输出**原样完整粘贴**回来（不得截断、不得转述）
+  3. **AI 分析**输出，定位问题，给出下一步命令或修复方案
+- 命令示例（PowerShell）：
+  ```powershell
+  # 设备状态
+  adb devices
+  # 清理日志缓冲区
+  adb logcat -c
+  # 拉取指定标签日志（不落盘，终端实时打印）
+  adb logcat -d -s "QiyuAuto:V" "AoshiA11y:V"
+  ```
+- **Windows 编码约定**：日志含中文，执行前先切换 UTF-8 代码页，避免乱码：
+  ```powershell
+  chcp 65001
+  ```
+  若使用 PowerShell，可改用：`[Console]::OutputEncoding = [System.Text.Encoding]::UTF8`
+- **禁止落盘**：日志直接终端打印后粘贴反馈；重定向到文件容易产生编码损坏（乱码），除非 AI 明确要求。
+
+### 3. 已知环境约束
+- 目标游戏（傲世西游 `com.tencent.JWX`）的**无障碍通道不可靠**：
+  - `dispatchGesture` 可能被系统接受（accepted=true）后既不执行也不回调（vivo/Funtouch 实测）
+  - `performAction(ACTION_CLICK)` 可能因游戏自绘渲染无节点树而失效
+  - 详见 `QiyuCoordinateAutomation.kt` 类注释
+- 真机为 vivo 设备（Funtouch OS），存在系统级无障碍手势限制。
+
+---
+
 ## 问题描述
 
 **问题**：应用在自动跳转游戏时焦点切换导致流程终止

@@ -152,6 +152,16 @@ object QiyuScoreSolver {
 
 /**
  * 由无障碍服务持有的奇遇状态机。每步只有一个点击，并在下一次截图确认预期页面后推进。
+ *
+ * 已知约束：目标游戏的无障碍通道不可靠，已实测确认——
+ * 1. dispatchGesture 可能被系统接受后既不执行也不回调（vivo/Funtouch 设备实测：accepted=true
+ *    但 onCompleted/onCancelled 均不触发，游戏无响应，无超时保护时状态机静默冻结）。
+ * 2. performAction(ACTION_CLICK) 也可能失效（游戏自绘渲染时节点树不可用）。
+ * 因此所有点击必须自带"手势回调超时兜底 + 自动重试 + 强制推进后截图验证"，
+ * 且坐标档案已通过 adb input tap 对照校准（命中验证以 OCR 文本块坐标为基准）。
+ * 若上述兜底仍系统性失效（重试后页面始终不变，说明手势通道被整体拦截），
+ * 备选点击通道按序评估：A. 游戏暴露节点树则降级 performAction(ACTION_CLICK)；
+ * B. 节点树为空（自绘渲染）则引入 Shizuku input tap 通道（与 adb 点击同链路）。
  */
 class QiyuCoordinateAutomation(
     private val service: AccessibilityService,
@@ -514,7 +524,10 @@ class QiyuCoordinateAutomation(
         // 先自动重试一次；仍无回调则强制推进状态并截图验证页面是否已实际变化。
         gestureTimeout?.let(handler::removeCallbacks)
         gestureTimeout = Runnable {
-            if (gestureCallbackReceived || runtime.stage != nextStage) return@Runnable
+            // 守卫只判断回调是否已收到。不能检查 runtime.stage != nextStage：
+            // 回调丢失时 completeTap 从未执行，stage 停留在旧值，该条件恒真会让兜底永远跳过，
+            // 状态机退回"静默冻结"（已实测：accepted=true 后无回调，5 秒/10 秒均无任何日志）。
+            if (gestureCallbackReceived) return@Runnable
             Log.w(TAG, "tap: 手势回调超时（${GESTURE_CALLBACK_TIMEOUT_MILLIS}ms 无 onCompleted/onCancelled）stage=$nextStage")
             if (gestureRetryCount < MAX_GESTURE_RETRIES) {
                 gestureRetryCount++

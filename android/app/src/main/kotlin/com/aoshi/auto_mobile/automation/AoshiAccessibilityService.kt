@@ -8,6 +8,7 @@ import android.os.Looper
 import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
+import android.view.accessibility.AccessibilityWindowInfo
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -120,6 +121,10 @@ class AoshiAccessibilityService : AccessibilityService() {
             eventTypes = AccessibilityEvent.TYPES_ALL_MASK
             flags = flags or AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS
             notificationTimeout = 100
+            // 必须显式声明手势注入能力（XML 同源声明双保险）：
+            // vivo/Funtouch 上未声明 canPerformGestures 时 dispatchGesture 返回 accepted
+            // 但静默不执行不回调（已实测），声明后与 adb input tap 同链路生效。
+            canPerformGestures = true
         }
         // 必须显式提交，否则系统仍然按 manifest 的旧 ServiceInfo 运行：
         // - takeScreenshot() 在 Android 14 上会因为 serviceInfo 没刷新而 onFailure
@@ -162,6 +167,11 @@ class AoshiAccessibilityService : AccessibilityService() {
             eventPackageName != null &&
             eventPackageName != targetGamePackageName
         ) {
+            // 弹窗/悬浮窗（如企业微信顶部弹窗）会以非目标包名产生事件（type=64 窗口变化等），
+            // 但前台焦点可能仍在游戏。事件包名≠目标时先核对当前真正聚焦的应用窗口，
+            // 仍聚焦目标游戏则忽略该事件，避免误停流程（已实测：企业微信弹窗误触发焦点丢失）。
+            if (isTargetGameFocused()) return
+
             // 检测到焦点离开目标应用
             if (focusLossDetectedAtMillis == null) {
                 // 首次检测到焦点丢失，记录时间并启动延时停止
@@ -314,6 +324,26 @@ class AoshiAccessibilityService : AccessibilityService() {
     }
 
     // ===== 私有方法 =====
+
+    /**
+     * 核对当前真正聚焦的应用窗口是否仍是目标游戏。
+     * 弹窗/悬浮窗事件（非目标包名）到来时，若聚焦窗口仍属于目标游戏则视为未丢失焦点。
+     * vivo 上 getWindows 异常/窗口无 root 时返回 false（按事件包名保守判定），不抛异常。
+     */
+    private fun isTargetGameFocused(): Boolean {
+        val target = targetGamePackageName ?: return false
+        return try {
+            windows.firstOrNull { window ->
+                window.type == AccessibilityWindowInfo.TYPE_APPLICATION &&
+                    (window.isActive || window.isFocused)
+            }?.let { window ->
+                (window.root?.packageName?.toString() ?: window.title?.toString())
+                    ?.startsWith(target) ?: false
+            } ?: false
+        } catch (_: Throwable) {
+            false
+        }
+    }
 
     private fun scheduleFlowStart(flow: String) {
         clearDelayedFlowStart()
