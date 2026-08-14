@@ -160,6 +160,10 @@ class QiyuCoordinateAutomation(
 ) {
     companion object {
         private const val TAG = "QiyuAuto"
+        // 手势回调兜底：部分系统（vivo/Funtouch）dispatchGesture 接受手势后既不执行也不回调，
+        // 若超时保护依赖 onCompleted，状态机将无限静默。超时后先重试一次，再强制推进并截图验证。
+        private const val GESTURE_CALLBACK_TIMEOUT_MILLIS = 5_000L
+        private const val MAX_GESTURE_RETRIES = 1
     }
 
     enum class Stage { ENTRY, DIVINATION, CHESTS, SELECT_INSPECT, WAIT_INSPECT, SELECT_OPEN, WAIT_OPEN, WAIT_SETTLEMENT, FAILED }
@@ -186,6 +190,9 @@ class QiyuCoordinateAutomation(
     private var captureQueued = false
     private var actionDeadline: Runnable? = null
     private var ocrDeadline: Runnable? = null
+    private var gestureTimeout: Runnable? = null
+    private var gestureCallbackReceived = false
+    private var gestureRetryCount = 0
     private var expectedScore: BigInteger? = null
     private var screenshotRetryCount = 0
     private val maxScreenshotRetries = 3
@@ -197,6 +204,8 @@ class QiyuCoordinateAutomation(
         actionDeadline = null
         ocrDeadline?.let(handler::removeCallbacks)
         ocrDeadline = null
+        gestureTimeout?.let(handler::removeCallbacks)
+        gestureTimeout = null
         recognizer.close()
     }
 
@@ -463,6 +472,19 @@ class QiyuCoordinateAutomation(
         completedRounds: Int = runtime.completedRounds,
     ) {
         Log.d(TAG, "tap: 发起点击 (${point.x}, ${point.y}) → $nextStage，$message")
+        gestureRetryCount = 0
+        doTap(point, nextStage, message, plan, pendingIndex, completedRounds)
+    }
+
+    private fun doTap(
+        point: QiyuCoordinateProfile.Point,
+        nextStage: Stage,
+        message: String,
+        plan: List<Int>,
+        pendingIndex: Int?,
+        completedRounds: Int,
+    ) {
+        gestureCallbackReceived = false
         val path = Path().apply {
             val width = service.resources.displayMetrics.widthPixels
             val height = service.resources.displayMetrics.heightPixels
@@ -472,34 +494,72 @@ class QiyuCoordinateAutomation(
         val gesture = GestureDescription.Builder().addStroke(stroke).build()
         val accepted = service.dispatchGesture(gesture, object : AccessibilityService.GestureResultCallback() {
             override fun onCompleted(gestureDescription: GestureDescription?) {
+                gestureCallbackReceived = true
+                cancelGestureTimeout()
                 Log.d(TAG, "tap onCompleted: stage=$nextStage")
-                val deadline = System.currentTimeMillis() + 30_000L
-                val next = if (nextStage == Stage.ENTRY && completedRounds > runtime.completedRounds) {
-                    Runtime(
-                        stage = nextStage,
-                        message = message,
-                        completedRounds = completedRounds,
-                        deadlineMillis = deadline,
-                    )
-                } else {
-                    runtime.copy(
-                        stage = nextStage,
-                        message = message,
-                        plan = plan,
-                        pendingIndex = pendingIndex,
-                        completedRounds = completedRounds,
-                        deadlineMillis = deadline,
-                    )
-                }
-                update(next)
-                scheduleDeadline(nextStage, deadline)
-                handler.postDelayed({ requestFrame() }, 650L)
+                completeTap(nextStage, message, plan, pendingIndex, completedRounds)
             }
             override fun onCancelled(gestureDescription: GestureDescription?) {
+                gestureCallbackReceived = true
+                cancelGestureTimeout()
                 fail("坐标点击未被系统接受")
             }
         }, null)
-        if (!accepted) fail("系统拒绝坐标点击请求")
+        Log.d(TAG, "tap: dispatchGesture accepted=$accepted stage=$nextStage retry=$gestureRetryCount")
+        if (!accepted) {
+            fail("系统拒绝坐标点击请求")
+            return
+        }
+        // 回调兜底：手势被系统接受但 onCompleted/onCancelled 均不回调时（vivo 已知问题），
+        // 先自动重试一次；仍无回调则强制推进状态并截图验证页面是否已实际变化。
+        gestureTimeout?.let(handler::removeCallbacks)
+        gestureTimeout = Runnable {
+            if (gestureCallbackReceived || runtime.stage != nextStage) return@Runnable
+            Log.w(TAG, "tap: 手势回调超时（${GESTURE_CALLBACK_TIMEOUT_MILLIS}ms 无 onCompleted/onCancelled）stage=$nextStage")
+            if (gestureRetryCount < MAX_GESTURE_RETRIES) {
+                gestureRetryCount++
+                Log.w(TAG, "tap: 自动重试第 $gestureRetryCount/$MAX_GESTURE_RETRIES 次点击 (${point.x}, ${point.y})")
+                doTap(point, nextStage, message, plan, pendingIndex, completedRounds)
+            } else {
+                Log.w(TAG, "tap: 重试后手势仍无回调，强制推进 stage=$nextStage 并截图验证")
+                completeTap(nextStage, "$message（手势回调丢失，强制推进验证）", plan, pendingIndex, completedRounds)
+            }
+        }.also { handler.postDelayed(it, GESTURE_CALLBACK_TIMEOUT_MILLIS) }
+    }
+
+    private fun cancelGestureTimeout() {
+        gestureTimeout?.let(handler::removeCallbacks)
+        gestureTimeout = null
+    }
+
+    private fun completeTap(
+        nextStage: Stage,
+        message: String,
+        plan: List<Int>,
+        pendingIndex: Int?,
+        completedRounds: Int,
+    ) {
+        val deadline = System.currentTimeMillis() + 30_000L
+        val next = if (nextStage == Stage.ENTRY && completedRounds > runtime.completedRounds) {
+            Runtime(
+                stage = nextStage,
+                message = message,
+                completedRounds = completedRounds,
+                deadlineMillis = deadline,
+            )
+        } else {
+            runtime.copy(
+                stage = nextStage,
+                message = message,
+                plan = plan,
+                pendingIndex = pendingIndex,
+                completedRounds = completedRounds,
+                deadlineMillis = deadline,
+            )
+        }
+        update(next)
+        scheduleDeadline(nextStage, deadline)
+        handler.postDelayed({ requestFrame() }, 650L)
     }
 
     private fun scheduleDeadline(stage: Stage, deadline: Long) {
