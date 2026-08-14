@@ -121,10 +121,18 @@ class AoshiAccessibilityService : AccessibilityService() {
             eventTypes = AccessibilityEvent.TYPES_ALL_MASK
             flags = flags or AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS
             notificationTimeout = 100
-            // 必须显式声明手势注入能力（XML 同源声明双保险）：
-            // vivo/Funtouch 上未声明 canPerformGestures 时 dispatchGesture 返回 accepted
-            // 但静默不执行不回调（已实测），声明后与 adb input tap 同链路生效。
-            canPerformGestures = true
+            // canPerformGestures 是 API 24 属性，CI 上 compileSdk 绑定可能不识别（与 canTakeScreenshot 同因），
+            // 改由下方反射写入；XML 中 android:canPerformGestures="true" 静态声明才是主保证。
+            // vivo/Funtouch 未声明该能力时 dispatchGesture accepted 后静默不执行（已实测）。
+        }
+        // 反射写入 canPerformGestures（API 24 属性，CI compileSdk 绑定可能缺失，与 canTakeScreenshot 同理）。
+        // XML 静态声明为主保证，此处刷新 runtime ServiceInfo 确保 setServiceInfo 提交后生效。
+        try {
+            val setCanPerformGestures = AccessibilityServiceInfo::class.java
+                .getMethod("setCanPerformGestures", Boolean::class.javaPrimitiveType)
+            setCanPerformGestures.invoke(serviceInfo, true)
+        } catch (_: Throwable) {
+            Log.w(TAG, "反射写入 canPerformGestures 失败，依赖 XML 静态声明")
         }
         // 必须显式提交，否则系统仍然按 manifest 的旧 ServiceInfo 运行：
         // - takeScreenshot() 在 Android 14 上会因为 serviceInfo 没刷新而 onFailure
