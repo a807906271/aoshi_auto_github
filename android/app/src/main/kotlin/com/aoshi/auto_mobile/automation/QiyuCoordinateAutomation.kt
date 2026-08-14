@@ -185,6 +185,7 @@ class QiyuCoordinateAutomation(
     private var runtime = Runtime()
     private var captureQueued = false
     private var actionDeadline: Runnable? = null
+    private var ocrDeadline: Runnable? = null
     private var expectedScore: BigInteger? = null
     private var screenshotRetryCount = 0
     private val maxScreenshotRetries = 3
@@ -194,6 +195,8 @@ class QiyuCoordinateAutomation(
     fun stop() {
         actionDeadline?.let(handler::removeCallbacks)
         actionDeadline = null
+        ocrDeadline?.let(handler::removeCallbacks)
+        ocrDeadline = null
         recognizer.close()
     }
 
@@ -224,6 +227,7 @@ class QiyuCoordinateAutomation(
     }
 
     private fun fail(reason: String) {
+        Log.e(TAG, "fail: $reason")
         update(runtime.copy(stage = Stage.FAILED, message = reason, deadlineMillis = null))
         onFailure(reason)
     }
@@ -276,15 +280,33 @@ class QiyuCoordinateAutomation(
     private fun recognize(bitmap: Bitmap) {
         val images = listOf(bitmap, QiyuCoordinateProfile.score.crop(bitmap), QiyuCoordinateProfile.viewCount.crop(bitmap), QiyuCoordinateProfile.openCount.crop(bitmap)) +
             QiyuCoordinateProfile.ruleRegions.map { it.crop(bitmap) }
+        Log.d(TAG, "recognize: 提交 ${images.size} 张图片进行 OCR（全屏 + 分数 + 查看/开启计数 + 5 规则区）")
         val tasks = images.map { recognizer.process(InputImage.fromBitmap(it, 0)) }
+
+        // OCR 超时保护：ML Kit 模型下载/识别挂起时给出明确失败，而不是静默等待
+        val ocrTimeout = Runnable {
+            Log.e(TAG, "recognize: OCR 超时（20 秒无回调），bitmap=${bitmap.width}x${bitmap.height}，${tasks.size} 个 task 全部未完成")
+            images.drop(1).forEach(Bitmap::recycle)
+            bitmap.recycle()
+            fail("OCR 识别超时：ML Kit 20 秒内未返回结果，请检查 GMS 模型下载状态")
+        }
+        ocrDeadline = ocrTimeout
+        handler.postDelayed(ocrTimeout, 20_000L)
+
         Tasks.whenAllSuccess<Text>(tasks).addOnSuccessListener { values ->
+            ocrDeadline?.let(handler::removeCallbacks)
+            ocrDeadline = null
             images.drop(1).forEach(Bitmap::recycle)
             bitmap.recycle()
             val texts = values.map { it.text }
+            Log.d(TAG, "recognize: OCR 完成，全屏=${texts[0].replace(Regex("\\s+"), "").take(80)}")
             consume(Frame(texts[0], texts[1], texts[2], texts[3], texts.drop(4)))
         }.addOnFailureListener {
+            ocrDeadline?.let(handler::removeCallbacks)
+            ocrDeadline = null
             images.drop(1).forEach(Bitmap::recycle)
             bitmap.recycle()
+            Log.e(TAG, "recognize: OCR 失败：${it.message ?: "未知错误"}")
             fail("OCR 识别失败：${it.message ?: "未知错误"}")
         }
     }
@@ -294,6 +316,7 @@ class QiyuCoordinateAutomation(
         val score = parseScore(frame.scoreText) ?: parseScore(frame.fullText)
         val viewCount = parseCount(frame.viewText, "查看") ?: parseCount(frame.fullText, "查看")
         val openCount = parseCount(frame.openText, "开启") ?: parseCount(frame.fullText, "开启")
+        Log.d(TAG, "consume: stage=${runtime.stage} page=$page score=$score viewRemaining=$viewCount openRemaining=$openCount")
         val rawOcr = listOf("全屏=${frame.fullText}", "分数=${frame.scoreText}", "查看=${frame.viewText}", "开启=${frame.openText}") +
             frame.slotTexts.mapIndexed { index, text -> "宝箱${index + 1}=$text" }
         val base = runtime.copy(score = score ?: runtime.score, viewRemaining = viewCount ?: runtime.viewRemaining,
@@ -435,6 +458,7 @@ class QiyuCoordinateAutomation(
         pendingIndex: Int? = runtime.pendingIndex,
         completedRounds: Int = runtime.completedRounds,
     ) {
+        Log.d(TAG, "tap: 发起点击 (${point.x}, ${point.y}) → $nextStage，$message")
         val path = Path().apply {
             val width = service.resources.displayMetrics.widthPixels
             val height = service.resources.displayMetrics.heightPixels
