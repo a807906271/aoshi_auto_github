@@ -174,6 +174,8 @@ class QiyuCoordinateAutomation(
         // 若超时保护依赖 onCompleted，状态机将无限静默。超时后先重试一次，再强制推进并截图验证。
         private const val GESTURE_CALLBACK_TIMEOUT_MILLIS = 5_000L
         private const val MAX_GESTURE_RETRIES = 1
+        // 点击完成后到下一节点截图验证的预留时间：页面切换/动画需要时间，提前截图会误判页面
+        private const val POST_TAP_CAPTURE_DELAY_MILLIS = 1_000L
     }
 
     enum class Stage { ENTRY, DIVINATION, CHESTS, SELECT_INSPECT, WAIT_INSPECT, SELECT_OPEN, WAIT_OPEN, WAIT_SETTLEMENT, FAILED }
@@ -206,6 +208,8 @@ class QiyuCoordinateAutomation(
     private var expectedScore: BigInteger? = null
     private var screenshotRetryCount = 0
     private val maxScreenshotRetries = 3
+    // 算卦动画等待计数：点击太极图后页面仍停在算卦页时，先等待重截，多次无效再重试点击
+    private var divinationRetryCount = 0
 
     fun start() = requestFrame()
 
@@ -347,7 +351,24 @@ class QiyuCoordinateAutomation(
         when (runtime.stage) {
             Stage.ENTRY -> if (page == Page.ENTRY) tap(QiyuCoordinateProfile.start, Stage.DIVINATION, "已点击开启奇遇，等待算卦页") else unknown(page)
             Stage.DIVINATION -> if (page == Page.DIVINATION) tap(QiyuCoordinateProfile.divination, Stage.CHESTS, "已点击算卦，等待宝箱页") else unknown(page)
-            Stage.CHESTS -> if (page == Page.CHESTS && base.score != null && base.viewRemaining != null && base.openRemaining != null) handleChestPage(base, frame) else unknown(page)
+            Stage.CHESTS -> when {
+                // 宝箱页强信号就绪，进入宝箱处理
+                page == Page.CHESTS && base.score != null && base.viewRemaining != null && base.openRemaining != null -> {
+                    divinationRetryCount = 0
+                    handleChestPage(base, frame)
+                }
+                // 点击太极图后仍停在算卦页：算卦动画未结束，或点击被入场动画吞掉。
+                // 先等待重截（动画常见 1~3 秒），连续 3 次仍无效则重试点击太极图。
+                page == Page.DIVINATION -> if (divinationRetryCount < 3) {
+                    divinationRetryCount++
+                    update(base.copy(message = "算卦动画进行中（$divinationRetryCount/3），等待后重截"))
+                    handler.postDelayed({ requestFrame() }, 800L)
+                } else {
+                    divinationRetryCount = 0
+                    tap(QiyuCoordinateProfile.divination, Stage.CHESTS, "算卦页未离开，重试点击太极图")
+                }
+                else -> unknown(page)
+            }
             Stage.SELECT_INSPECT -> if (page == Page.CHESTS) tap(QiyuCoordinateProfile.inspect, Stage.WAIT_INSPECT, "已点击查看，等待第 ${(base.pendingIndex ?: 0) + 1} 个宝箱规则") else unknown(page)
             Stage.WAIT_INSPECT -> if (page == Page.CHESTS) recordInspection(base, frame) else unknown(page)
             Stage.SELECT_OPEN -> if (page == Page.CHESTS) openSelectedChest(base) else unknown(page)
@@ -575,7 +596,7 @@ class QiyuCoordinateAutomation(
         }
         update(next)
         scheduleDeadline(nextStage, deadline)
-        handler.postDelayed({ requestFrame() }, 650L)
+        handler.postDelayed({ requestFrame() }, POST_TAP_CAPTURE_DELAY_MILLIS)
     }
 
     private fun scheduleDeadline(stage: Stage, deadline: Long) {
