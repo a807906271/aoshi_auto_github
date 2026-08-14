@@ -374,7 +374,10 @@ class QiyuCoordinateAutomation(
         val isEntryText = text.contains("开启奇遇") || text.contains("天赋奇遇") ||
                           text.contains("奇遇秘宝") || text.contains("奇遇卷轴") ||
                           text.contains("奇遇入口") || text.contains("天脉奇遇")
-        val isDivinationText = text.contains("算卦") || text.contains("占卜")
+        // DIVINATION 弱信号：页面顶部"奇遇"标题常被 OCR 误识别（实测输出"奇週"）。
+        // 用排除法确认页面归属后即可盲点中央太极图，后续由 CHESTS 页强信号兜底验证。
+        val isDivinationText = text.contains("算卦") || text.contains("占卜") ||
+            (text.contains("奇") && !hasChestCounter && !isSettlementText && !isEntryText)
 
         // 第三层：阶段判定。按特异度从高到低，避免入口页"奇遇秘宝"被误判为 CHESTS。
         // 阶段迁移白名单由 consume() 里 when (runtime.stage) 强约束，无需在此重复。
@@ -385,7 +388,7 @@ class QiyuCoordinateAutomation(
             hasChestCounter && hasScore -> Page.CHESTS
             // ENTRY：关键词命中 + 没有 CHESTS 强信号（双重否定杜绝入口页误识别为 CHESTS）
             isEntryText && !hasChestCounter -> Page.ENTRY
-            // DIVINATION：唯一特征是"算卦"
+            // DIVINATION：强关键词，或顶部标题弱信号（排除法确认后盲点太极图）
             isDivinationText -> Page.DIVINATION
             else -> Page.UNKNOWN
         }
