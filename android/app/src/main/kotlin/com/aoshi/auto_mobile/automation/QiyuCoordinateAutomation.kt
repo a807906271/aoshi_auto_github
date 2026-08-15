@@ -214,6 +214,9 @@ class QiyuCoordinateAutomation(
     private var gestureCallbackReceived = false
     private var gestureRetryCount = 0
     private var expectedScore: BigInteger? = null
+    // 截图 API 调用失败重试计数器（系统级错误，如权限/前台状态问题）
+    private var screenshotRetryCount = 0
+    private val maxScreenshotRetries = 3
     // 阶段重试计数器：记录当前阶段等待目标页面的重试次数（页面未识别或识别为错误页面时递增）
     private var stageRetryCount = 0
     private val maxStageRetries = 3
