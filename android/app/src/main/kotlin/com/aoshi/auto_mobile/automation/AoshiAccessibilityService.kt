@@ -649,9 +649,7 @@ class AoshiAccessibilityService : AccessibilityService() {
     private fun toQiyuPhase(stage: QiyuCoordinateAutomation.Stage): GameFlows.QiyuPhase = when (stage) {
         QiyuCoordinateAutomation.Stage.ENTRY -> GameFlows.QiyuPhase.WaitStart
         QiyuCoordinateAutomation.Stage.DIVINATION -> GameFlows.QiyuPhase.EnterDivination
-        QiyuCoordinateAutomation.Stage.CHESTS,
-        QiyuCoordinateAutomation.Stage.SELECT_INSPECT -> GameFlows.QiyuPhase.SelectBox
-        QiyuCoordinateAutomation.Stage.WAIT_INSPECT -> GameFlows.QiyuPhase.InspectBoxes
+        QiyuCoordinateAutomation.Stage.CHESTS -> GameFlows.QiyuPhase.SelectBox
         QiyuCoordinateAutomation.Stage.SELECT_OPEN,
         QiyuCoordinateAutomation.Stage.WAIT_OPEN -> GameFlows.QiyuPhase.OpenBest
         QiyuCoordinateAutomation.Stage.WAIT_SETTLEMENT -> GameFlows.QiyuPhase.ConfirmReward

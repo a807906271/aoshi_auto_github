@@ -186,7 +186,7 @@ class QiyuCoordinateAutomation(
         private const val POST_TAP_CAPTURE_DELAY_MILLIS = 1_000L
     }
 
-    enum class Stage { ENTRY, DIVINATION, CHESTS, SELECT_INSPECT, WAIT_INSPECT, SELECT_OPEN, WAIT_OPEN, WAIT_SETTLEMENT, FAILED }
+    enum class Stage { ENTRY, DIVINATION, CHESTS, SELECT_OPEN, WAIT_OPEN, WAIT_SETTLEMENT, FAILED }
 
     data class ChestResult(val index: Int, val rawText: String, val rule: QiyuRule?)
     data class Runtime(
@@ -550,73 +550,10 @@ class QiyuCoordinateAutomation(
         }
     }
 
-    private fun selectForInspection(base: Runtime) {
-        val index = base.chests.size
-        if (index >= QiyuCoordinateProfile.slots.size) {
-            fail("查看次数超过已配置的五个宝箱槽位")
-            return
-        }
-        tap(QiyuCoordinateProfile.slots[index], Stage.SELECT_INSPECT, "已选中第 ${index + 1} 个宝箱，等待执行查看", pendingIndex = index)
-    }
-
-    private fun recordInspection(base: Runtime, frame: Frame) {
-        val index = base.pendingIndex ?: run { fail("查看结果缺少对应宝箱槽位"); return }
-        val raw = frame.slotTexts.getOrNull(index).orEmpty()
-        if (raw.isBlank()) {
-            update(base.copy(message = "等待第 ${index + 1} 个宝箱规则出现"))
-            handler.postDelayed({ requestFrame() }, 650L)
-            return
-        }
-        val rule = QiyuRuleParser.parse(raw)
-        if (rule == null) {
-            fail("第 ${index + 1} 个宝箱规则无法安全识别：$raw")
-            return
-        }
-        val chests = base.chests.filterNot { it.index == index } + ChestResult(index, raw, rule)
-        val next = base.copy(chests = chests.sortedBy { it.index }, pendingIndex = null,
-            message = "已记录第 ${index + 1} 个宝箱：${rule.display}")
-        update(next)
-        requestFrame()
-    }
-
-    private fun selectForOpening(base: Runtime) {
-        val rules = base.chests.mapNotNull { chest -> chest.rule?.let { chest.index to it } }.toMap()
-        if (rules.size < minOf(base.openRemaining!!, base.chests.size)) {
-            fail("存在未识别的查看结果，停止开启以避免误操作")
-            return
-        }
-        val plan = QiyuScoreSolver.bestPlan(base.score!!, rules, base.openRemaining!!)
-            ?: run { fail("没有可安全开启的已查看宝箱"); return }
-        val nextIndex = plan.order.firstOrNull() ?: run {
-            tap(QiyuCoordinateProfile.finish, Stage.WAIT_SETTLEMENT, "无可开启宝箱，等待结算")
-            return
-        }
-        tap(QiyuCoordinateProfile.slots[nextIndex], Stage.SELECT_OPEN,
-            "最优序列 ${plan.order.joinToString(" → ") { "第 ${it + 1} 个" }}，选中第 ${nextIndex + 1} 个宝箱",
-            plan = plan.order, pendingIndex = nextIndex)
-    }
-
     private fun openSelectedChest(base: Runtime) {
         val index = base.pendingIndex ?: run { fail("开启前缺少选中宝箱槽位"); return }
         // 盲开模式：不需要规则和分数，直接点击开启按钮
         tap(QiyuCoordinateProfile.open, Stage.WAIT_OPEN, "已点击开启第 ${index + 1} 个宝箱")
-    }
-
-    private fun verifyOpen(base: Runtime, frame: Frame) {
-        // 简化流程：不再校验开启后的分数变化，直接信任手势已生效，继续执行预计方案
-        val opened = runtime.pendingIndex ?: run { fail("开启结果缺少对应宝箱槽位"); return }
-        val remaining = base.chests.filterNot { it.index == opened }
-        val nextScore = if (expectedScore != null) expectedScore!! else runtime.score ?: BigInteger.ZERO
-        update(base.copy(
-            score = nextScore,  // 使用预计分数，不依赖 OCR
-            chests = remaining,
-            plan = emptyList(),
-            pendingIndex = null,
-            message = "已开启第 ${opened + 1} 个宝箱（预计分数：$nextScore）"
-        ))
-        expectedScore = null
-        // 等待开启动画完成后继续
-        handler.postDelayed({ requestFrame() }, 1000L)
     }
 
     private fun tap(
@@ -738,7 +675,7 @@ class QiyuCoordinateAutomation(
 
     private fun stageLabel(stage: Stage): String = when (stage) {
         Stage.ENTRY -> "奇遇入口"; Stage.DIVINATION -> "算卦页"; Stage.CHESTS -> "宝箱页"
-        Stage.SELECT_INSPECT -> "宝箱选中"; Stage.WAIT_INSPECT -> "查看结果"; Stage.SELECT_OPEN -> "开启宝箱选中"
+        Stage.SELECT_OPEN -> "开启宝箱选中"
         Stage.WAIT_OPEN -> "开启结果"; Stage.WAIT_SETTLEMENT -> "结算弹框"; Stage.FAILED -> "失败状态"
     }
 
