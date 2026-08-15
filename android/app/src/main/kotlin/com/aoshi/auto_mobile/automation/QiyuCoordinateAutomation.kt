@@ -214,10 +214,9 @@ class QiyuCoordinateAutomation(
     private var gestureCallbackReceived = false
     private var gestureRetryCount = 0
     private var expectedScore: BigInteger? = null
-    private var screenshotRetryCount = 0
-    private val maxScreenshotRetries = 3
-    // 算卦动画等待计数：点击太极图后页面仍停在算卦页时，先等待重截，多次无效再重试点击
-    private var divinationRetryCount = 0
+    // 阶段重试计数器：记录当前阶段等待目标页面的重试次数（页面未识别或识别为错误页面时递增）
+    private var stageRetryCount = 0
+    private val maxStageRetries = 3
 
     fun start() = requestFrame()
 
@@ -376,37 +375,96 @@ class QiyuCoordinateAutomation(
             // pendingIndex、plan、chests 等字段保持 runtime 原值（通过 copy 自动继承）
         )
         when (runtime.stage) {
-            Stage.ENTRY -> if (page == Page.ENTRY) tap(QiyuCoordinateProfile.start, Stage.DIVINATION, "已点击开启奇遇，等待算卦页") else unknown(page)
-            Stage.DIVINATION -> if (page == Page.DIVINATION) tap(QiyuCoordinateProfile.divination, Stage.CHESTS, "已点击算卦，等待宝箱页") else unknown(page)
+            Stage.ENTRY -> when {
+                page == Page.ENTRY -> {
+                    stageRetryCount = 0
+                    tap(QiyuCoordinateProfile.start, Stage.DIVINATION, "已点击开启奇遇，等待算卦页")
+                }
+                else -> retryOrFail(page, "入口页", 1500L)
+            }
+            Stage.DIVINATION -> when {
+                // 算卦页 OCR 识别成功，立即点击太极图
+                page == Page.DIVINATION -> {
+                    stageRetryCount = 0
+                    tap(QiyuCoordinateProfile.divination, Stage.CHESTS, "已点击算卦，等待宝箱页")
+                }
+                // 页面未识别到或识别错误：重试截图，超过 3 次后盲点太极图兜底
+                else -> {
+                    if (stageRetryCount < maxStageRetries) {
+                        stageRetryCount++
+                        val reason = if (page == Page.UNKNOWN && frame.fullText.isBlank()) {
+                            "截图空白（动画中 $stageRetryCount/$maxStageRetries）"
+                        } else {
+                            "未识别到算卦页（$stageRetryCount/$maxStageRetries，当前=$page）"
+                        }
+                        update(base.copy(message = "算卦页$reason，延长等待"))
+                        handler.postDelayed({ requestFrame() }, 1500L)
+                    } else {
+                        stageRetryCount = 0
+                        tap(QiyuCoordinateProfile.divination, Stage.CHESTS, "算卦页识别超时，盲点太极图")
+                    }
+                }
+            }
             Stage.CHESTS -> when {
                 // 宝箱页强信号就绪，进入宝箱处理
                 page == Page.CHESTS && base.score != null && base.viewRemaining != null && base.openRemaining != null -> {
-                    divinationRetryCount = 0
+                    stageRetryCount = 0
                     handleChestPage(base, frame)
                 }
                 // 宝箱页已识别但计数/分数未解析出（OCR 波动）：等待重截，30 秒 deadline 兜底
                 page == Page.CHESTS -> {
-                    divinationRetryCount = 0
+                    stageRetryCount = 0
                     update(base.copy(message = "宝箱页数据解析中（分数/剩余次数未读到），等待后重截"))
                     handler.postDelayed({ requestFrame() }, 800L)
                 }
-                // 点击太极图后仍停在算卦页：算卦动画未结束，或点击被入场动画吞掉。
-                // 先等待重截（动画常见 1~3 秒），连续 3 次仍无效则重试点击太极图。
-                page == Page.DIVINATION -> if (divinationRetryCount < 3) {
-                    divinationRetryCount++
-                    update(base.copy(message = "算卦动画进行中（$divinationRetryCount/3），等待后重截"))
-                    handler.postDelayed({ requestFrame() }, 800L)
-                } else {
-                    divinationRetryCount = 0
-                    tap(QiyuCoordinateProfile.divination, Stage.CHESTS, "算卦页未离开，重试点击太极图")
+                // 点击太极图后仍停在算卦页：算卦动画未结束，或点击被入场动画吞掉
+                page == Page.DIVINATION -> {
+                    if (stageRetryCount < maxStageRetries) {
+                        stageRetryCount++
+                        update(base.copy(message = "算卦动画进行中（$stageRetryCount/$maxStageRetries），等待后重截"))
+                        handler.postDelayed({ requestFrame() }, 800L)
+                    } else {
+                        stageRetryCount = 0
+                        tap(QiyuCoordinateProfile.divination, Stage.CHESTS, "算卦页未离开，重试点击太极图")
+                    }
                 }
-                else -> unknown(page)
+                else -> retryOrFail(page, "宝箱页", 1200L)
             }
-            Stage.SELECT_INSPECT -> if (page == Page.CHESTS) tap(QiyuCoordinateProfile.inspect, Stage.WAIT_INSPECT, "已点击查看，等待第 ${(base.pendingIndex ?: 0) + 1} 个宝箱规则") else unknown(page)
-            Stage.WAIT_INSPECT -> if (page == Page.CHESTS) recordInspection(base, frame) else unknown(page)
-            Stage.SELECT_OPEN -> if (page == Page.CHESTS) openSelectedChest(base) else unknown(page)
-            Stage.WAIT_OPEN -> if (page == Page.CHESTS) verifyOpen(base, frame) else unknown(page)
-            Stage.WAIT_SETTLEMENT -> if (page == Page.SETTLEMENT) tap(QiyuCoordinateProfile.confirm, Stage.ENTRY, "已确认结算，等待下一轮入口", completedRounds = runtime.completedRounds + 1) else unknown(page)
+            Stage.SELECT_INSPECT -> when {
+                page == Page.CHESTS -> {
+                    stageRetryCount = 0
+                    tap(QiyuCoordinateProfile.inspect, Stage.WAIT_INSPECT, "已点击查看，等待第 ${(base.pendingIndex ?: 0) + 1} 个宝箱规则")
+                }
+                else -> retryOrFail(page, "宝箱页（选中查看后）", 1000L)
+            }
+            Stage.WAIT_INSPECT -> when {
+                page == Page.CHESTS -> {
+                    stageRetryCount = 0
+                    recordInspection(base, frame)
+                }
+                else -> retryOrFail(page, "宝箱页（查看规则后）", 1000L)
+            }
+            Stage.SELECT_OPEN -> when {
+                page == Page.CHESTS -> {
+                    stageRetryCount = 0
+                    openSelectedChest(base)
+                }
+                else -> retryOrFail(page, "宝箱页（选中开启后）", 1000L)
+            }
+            Stage.WAIT_OPEN -> when {
+                page == Page.CHESTS -> {
+                    stageRetryCount = 0
+                    verifyOpen(base, frame)
+                }
+                else -> retryOrFail(page, "宝箱页（开启后）", 1000L)
+            }
+            Stage.WAIT_SETTLEMENT -> when {
+                page == Page.SETTLEMENT -> {
+                    stageRetryCount = 0
+                    tap(QiyuCoordinateProfile.confirm, Stage.ENTRY, "已确认结算，等待下一轮入口", completedRounds = runtime.completedRounds + 1)
+                }
+                else -> retryOrFail(page, "结算页", 1200L)
+            }
             Stage.FAILED -> Unit
         }
     }
@@ -459,6 +517,23 @@ class QiyuCoordinateAutomation(
             base.viewRemaining!! > 0 -> selectForInspection(base)
             base.openRemaining!! > 0 -> selectForOpening(base)
             else -> tap(QiyuCoordinateProfile.finish, Stage.WAIT_SETTLEMENT, "已点击完成，等待结算弹框")
+        }
+    }
+
+    // 通用重试逻辑：页面未识别到预期环节时，先重试截图，超过最大次数后报错
+    private fun retryOrFail(page: Page, expectedPageName: String, retryDelayMillis: Long) {
+        if (stageRetryCount < maxStageRetries) {
+            stageRetryCount++
+            val reason = if (page == Page.UNKNOWN && runtime.rawOcr.isBlank()) {
+                "截图空白（$stageRetryCount/$maxStageRetries）"
+            } else {
+                "未识别到$expectedPageName（$stageRetryCount/$maxStageRetries，当前=$page）"
+            }
+            update(runtime.copy(message = "等待$expectedPageName：$reason"))
+            handler.postDelayed({ requestFrame() }, retryDelayMillis)
+        } else {
+            stageRetryCount = 0
+            unknown(page)
         }
     }
 
@@ -612,6 +687,8 @@ class QiyuCoordinateAutomation(
         pendingIndex: Int?,
         completedRounds: Int,
     ) {
+        // 进入新阶段时重置重试计数器
+        stageRetryCount = 0
         val deadline = System.currentTimeMillis() + 30_000L
         val next = if (nextStage == Stage.ENTRY && completedRounds > runtime.completedRounds) {
             Runtime(
