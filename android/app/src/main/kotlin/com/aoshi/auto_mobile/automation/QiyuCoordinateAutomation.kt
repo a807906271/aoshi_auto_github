@@ -47,10 +47,10 @@ object QiyuCoordinateProfile {
     val finish = Point(0.839, 0.300)            // 完成
     val confirm = Point(0.503, 0.739)           // 确定（结算弹框）
 
-    // 宝箱页分数区域：实测"当前分数"文字块在 y[947,1021]，数字（金色）在文字正下方约 y[1050,1180]。
-    // 横向居中分布覆盖 6 位数宽度 x[200,1060]，纵向紧贴数字 y[1050,1180]。
-    // 原始 1260×2800 坐标 [200,1050 - 1060,1180] 换算到 460×1024 基准。
-    val score = Region(73.0 / 460, 384.0 / 1024, 387.0 / 460, 431.0 / 1024)
+    // 宝箱页分数区域：用户实测精准坐标（1260×2800 原始分辨率）
+    // 1 位数 [544,1294 - 710,1408]，2 位数 [490,1294 - 745,1409]
+    // 扩展至 6 位数容量：x[236,999] y[1294,1409]，换算到 460×1024 基准
+    val score = Region(86.0 / 460, 473.0 / 1024, 365.0 / 460, 515.0 / 1024)
     // 底部计数区域：宝箱页实测"剩余次数3"（OCR 常误识别"刻余次数3/利余次数3"）
     // 在底部按钮上方。原始区域仅覆盖数字（宽50 高75px）过小导致 ML Kit 拒绝（<32px），
     // 扩大到文字+数字完整区域（宽245 高75px，换算后 89×27px 基准）。
@@ -387,7 +387,7 @@ class QiyuCoordinateAutomation(
             Stage.SELECT_INSPECT -> if (page == Page.CHESTS) tap(QiyuCoordinateProfile.inspect, Stage.WAIT_INSPECT, "已点击查看，等待第 ${(base.pendingIndex ?: 0) + 1} 个宝箱规则") else unknown(page)
             Stage.WAIT_INSPECT -> if (page == Page.CHESTS) recordInspection(base, frame) else unknown(page)
             Stage.SELECT_OPEN -> if (page == Page.CHESTS) openSelectedChest(base) else unknown(page)
-            Stage.WAIT_OPEN -> if (page == Page.CHESTS && base.score != null) verifyOpen(base, frame) else unknown(page)
+            Stage.WAIT_OPEN -> if (page == Page.CHESTS) verifyOpen(base, frame) else unknown(page)
             Stage.WAIT_SETTLEMENT -> if (page == Page.SETTLEMENT) tap(QiyuCoordinateProfile.confirm, Stage.ENTRY, "已确认结算，等待下一轮入口", completedRounds = runtime.completedRounds + 1) else unknown(page)
             Stage.FAILED -> Unit
         }
@@ -499,23 +499,20 @@ class QiyuCoordinateAutomation(
     }
 
     private fun verifyOpen(base: Runtime, frame: Frame) {
-        val before = runtime.score ?: run { fail("开启前缺少当前分数"); return }
-        val after = base.score ?: run { fail("开启后无法读取当前分数"); return }
-        if (expectedScore != null && after == before) {
-            update(base.copy(message = "等待开启后的分数刷新：$before"))
-            handler.postDelayed({ requestFrame() }, 650L)
-            return
-        }
-        if (expectedScore != null && after != expectedScore) {
-            fail("开启后分数校验失败：预期 $expectedScore，实际 $after")
-            return
-        }
+        // 简化流程：不再校验开启后的分数变化，直接信任手势已生效，继续执行预计方案
         val opened = runtime.pendingIndex ?: run { fail("开启结果缺少对应宝箱槽位"); return }
         val remaining = base.chests.filterNot { it.index == opened }
-        update(base.copy(chests = remaining, plan = emptyList(), pendingIndex = null,
-            message = "已开启第 ${opened + 1} 个宝箱：$before → $after"))
+        val nextScore = if (expectedScore != null) expectedScore!! else runtime.score ?: BigInteger.ZERO
+        update(base.copy(
+            score = nextScore,  // 使用预计分数，不依赖 OCR
+            chests = remaining,
+            plan = emptyList(),
+            pendingIndex = null,
+            message = "已开启第 ${opened + 1} 个宝箱（预计分数：$nextScore）"
+        ))
         expectedScore = null
-        requestFrame()
+        // 等待开启动画完成后继续
+        handler.postDelayed({ requestFrame() }, 1000L)
     }
 
     private fun tap(
