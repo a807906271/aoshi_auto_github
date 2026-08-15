@@ -48,9 +48,10 @@ object QiyuCoordinateProfile {
     val confirm = Point(0.503, 0.739)           // 确定（结算弹框）
 
     // 宝箱页分数区域：用户实测精准坐标（1260×2800 原始分辨率）
-    // 1 位数 [544,1294 - 710,1408]，2 位数 [490,1294 - 745,1409]
-    // 采用 2 位数实测框，换算到 460×1024 基准（避免过度扩展导致 OCR 失败）
-    val score = Region(179.0 / 460, 473.0 / 1024, 272.0 / 460, 515.0 / 1024)
+    // 2 位数 [490,1294 - 745,1409]，1 位数 [544,1294 - 710,1408]
+    // 双区域兜底：优先识别2位数区域，失败则使用1位数区域
+    val scoreTwoDigit = Region(179.0 / 460, 473.0 / 1024, 272.0 / 460, 515.0 / 1024)  // 2位数
+    val scoreOneDigit = Region(199.0 / 460, 473.0 / 1024, 259.0 / 460, 515.0 / 1024)  // 1位数
     // 底部计数区域：宝箱页实测"剩余次数3"（OCR 常误识别"刻余次数3/利余次数3"）
     // 在底部按钮上方。原始区域仅覆盖数字（宽50 高75px）过小导致 ML Kit 拒绝（<32px），
     // 扩大到文字+数字完整区域（宽245 高75px，换算后 89×27px 基准）。
@@ -202,7 +203,7 @@ class QiyuCoordinateAutomation(
         val deadlineMillis: Long? = null,
     )
 
-    private data class Frame(val fullText: String, val scoreText: String, val viewText: String, val openText: String, val slotTexts: List<String>)
+    private data class Frame(val fullText: String, val scoreTwoDigit: String, val scoreOneDigit: String, val viewText: String, val openText: String, val slotTexts: List<String>)
     private val handler = Handler(Looper.getMainLooper())
     private val recognizer = TextRecognition.getClient(ChineseTextRecognizerOptions.Builder().build())
     private var runtime = Runtime()
@@ -308,9 +309,14 @@ class QiyuCoordinateAutomation(
     }
 
     private fun recognize(bitmap: Bitmap) {
-        val images = listOf(bitmap, QiyuCoordinateProfile.score.crop(bitmap), QiyuCoordinateProfile.viewCount.crop(bitmap), QiyuCoordinateProfile.openCount.crop(bitmap)) +
-            QiyuCoordinateProfile.ruleRegions.map { it.crop(bitmap) }
-        Log.d(TAG, "recognize: 提交 ${images.size} 张图片进行 OCR（全屏 + 分数 + 查看/开启计数 + 5 规则区）")
+        val images = listOf(
+            bitmap,
+            QiyuCoordinateProfile.scoreTwoDigit.crop(bitmap),  // 2位数分数区域
+            QiyuCoordinateProfile.scoreOneDigit.crop(bitmap),  // 1位数分数区域
+            QiyuCoordinateProfile.viewCount.crop(bitmap),
+            QiyuCoordinateProfile.openCount.crop(bitmap)
+        ) + QiyuCoordinateProfile.ruleRegions.map { it.crop(bitmap) }
+        Log.d(TAG, "recognize: 提交 ${images.size} 张图片进行 OCR（全屏 + 分数2位 + 分数1位 + 查看/开启计数 + 5 规则区）")
         val tasks = images.map { recognizer.process(InputImage.fromBitmap(it, 0)) }
 
         // OCR 超时保护：ML Kit 模型下载/识别挂起时给出明确失败，而不是静默等待
@@ -334,7 +340,8 @@ class QiyuCoordinateAutomation(
                 val r = b.boundingBox
                 "${b.text.replace(Regex("\\s+"), "")}@[${r?.left},${r?.top}-${r?.right},${r?.bottom}]"
             })
-            consume(Frame(texts[0], texts[1], texts[2], texts[3], texts.drop(4)))
+            // texts[1]=2位数区域, texts[2]=1位数区域, texts[3]=查看计数, texts[4]=开启计数, texts[5..9]=规则区
+            consume(Frame(texts[0], texts[1], texts[2], texts[3], texts[4], texts.drop(5)))
         }.addOnFailureListener {
             ocrDeadline?.let(handler::removeCallbacks)
             ocrDeadline = null
@@ -350,15 +357,16 @@ class QiyuCoordinateAutomation(
         // 分数只认宝箱页"当前分数"下方的数字。入口/算卦页分数与奇遇流程无关（实测入口 OCR
         // 会误抓"目标分数823800"），一律忽略；全屏 fallback 会把"剩余次数3"误当成分数，禁用。
         // 首次识别到分数后持久化，后续不再重新识别（避免规则弹框遮挡导致 score=null）。
+        // 双区域兜底：优先识别2位数区域，失败则使用1位数区域。
         val score = if (page == Page.CHESTS && runtime.score == null) {
-            parseScore(frame.scoreText)
+            parseScore(frame.scoreTwoDigit) ?: parseScore(frame.scoreOneDigit)
         } else {
             null  // 已有分数或非宝箱页，不再识别
         }
         val viewCount = parseCount(frame.viewText, "查看") ?: parseCount(frame.fullText, "查看")
         val openCount = parseCount(frame.openText, "开启") ?: parseCount(frame.fullText, "开启")
         Log.d(TAG, "consume: stage=${runtime.stage} page=$page score=$score viewRemaining=$viewCount openRemaining=$openCount pendingIndex=${runtime.pendingIndex}")
-        val rawOcr = listOf("全屏=${frame.fullText}", "分数=${frame.scoreText}", "查看=${frame.viewText}", "开启=${frame.openText}") +
+        val rawOcr = listOf("全屏=${frame.fullText}", "分数2位=${frame.scoreTwoDigit}", "分数1位=${frame.scoreOneDigit}", "查看=${frame.viewText}", "开启=${frame.openText}") +
             frame.slotTexts.mapIndexed { index, text -> "宝箱${index + 1}=$text" }
         val base = runtime.copy(
             score = score ?: runtime.score,
