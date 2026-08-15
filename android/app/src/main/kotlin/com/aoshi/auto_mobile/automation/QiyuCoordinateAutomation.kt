@@ -420,7 +420,7 @@ class QiyuCoordinateAutomation(
         val chestCounter = Regex("\\d+\\s*/\\s*\\d+")
         val hasChestCounter = chestCounter.containsMatchIn(frame.viewText) ||
                               chestCounter.containsMatchIn(frame.openText)
-        val hasScore = parseScore(frame.scoreText) != null
+        val hasScore = parseScore(frame.scoreTwoDigit) != null || parseScore(frame.scoreOneDigit) != null
 
         // 第二层：全屏 OCR 容错关键词集合（每页独有强信号优先于共享弱信号）
         val isSettlementText = text.contains("本局得分") ||
