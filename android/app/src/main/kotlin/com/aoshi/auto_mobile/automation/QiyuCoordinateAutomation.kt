@@ -410,9 +410,10 @@ class QiyuCoordinateAutomation(
         val isEntryText = text.contains("开启奇遇") || text.contains("天赋奇遇") ||
                           text.contains("奇遇秘宝") || text.contains("奇遇卷轴") ||
                           text.contains("奇遇入口") || text.contains("天脉奇遇")
-        // CHESTS 独有强信号：底部"查看宝箱"+"开启宝箱"按钮同屏（OCR 识别稳定）。
-        // 优先级高于共享的"奇遇"标题弱信号，避免宝箱页误判为算卦页。
-        val hasChestButtons = text.contains("查看宝箱") && text.contains("开启宝箱")
+        // CHESTS 独有强信号：底部"查看宝箱"+"开启宝箱"按钮同屏。OCR 可能误识别"宝箱"为
+        // "全箱/室箱"等，放宽匹配容忍变体。优先级高于共享的"奇遇"标题弱信号。
+        val hasChestButtons = (text.contains("查看") && text.contains("箱")) &&
+                              (text.contains("开启") && text.contains("箱"))
         // DIVINATION 弱信号：页面顶部"奇遇"标题常被 OCR 误识别（实测输出"奇週"）。
         // 用排除法确认页面归属后即可盲点中央太极图；宝箱页同有"奇遇"标题，必须排除。
         val isDivinationText = text.contains("算卦") || text.contains("占卜") ||
