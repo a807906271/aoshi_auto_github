@@ -349,14 +349,24 @@ class QiyuCoordinateAutomation(
         val page = detectPage(frame)
         // 分数只认宝箱页"当前分数"下方的数字。入口/算卦页分数与奇遇流程无关（实测入口 OCR
         // 会误抓"目标分数823800"），一律忽略；全屏 fallback 会把"剩余次数3"误当成分数，禁用。
-        val score = if (page == Page.CHESTS) parseScore(frame.scoreText) else null
+        // 首次识别到分数后持久化，后续不再重新识别（避免规则弹框遮挡导致 score=null）。
+        val score = if (page == Page.CHESTS && runtime.score == null) {
+            parseScore(frame.scoreText)
+        } else {
+            null  // 已有分数或非宝箱页，不再识别
+        }
         val viewCount = parseCount(frame.viewText, "查看") ?: parseCount(frame.fullText, "查看")
         val openCount = parseCount(frame.openText, "开启") ?: parseCount(frame.fullText, "开启")
-        Log.d(TAG, "consume: stage=${runtime.stage} page=$page score=$score viewRemaining=$viewCount openRemaining=$openCount")
+        Log.d(TAG, "consume: stage=${runtime.stage} page=$page score=$score viewRemaining=$viewCount openRemaining=$openCount pendingIndex=${runtime.pendingIndex}")
         val rawOcr = listOf("全屏=${frame.fullText}", "分数=${frame.scoreText}", "查看=${frame.viewText}", "开启=${frame.openText}") +
             frame.slotTexts.mapIndexed { index, text -> "宝箱${index + 1}=$text" }
-        val base = runtime.copy(score = score ?: runtime.score, viewRemaining = viewCount ?: runtime.viewRemaining,
-            openRemaining = openCount ?: runtime.openRemaining, rawOcr = rawOcr.joinToString("\n"))
+        val base = runtime.copy(
+            score = score ?: runtime.score,
+            viewRemaining = viewCount ?: runtime.viewRemaining,
+            openRemaining = openCount ?: runtime.openRemaining,
+            rawOcr = rawOcr.joinToString("\n")
+            // pendingIndex、plan、chests 等字段保持 runtime 原值（通过 copy 自动继承）
+        )
         when (runtime.stage) {
             Stage.ENTRY -> if (page == Page.ENTRY) tap(QiyuCoordinateProfile.start, Stage.DIVINATION, "已点击开启奇遇，等待算卦页") else unknown(page)
             Stage.DIVINATION -> if (page == Page.DIVINATION) tap(QiyuCoordinateProfile.divination, Stage.CHESTS, "已点击算卦，等待宝箱页") else unknown(page)
