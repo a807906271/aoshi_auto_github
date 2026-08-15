@@ -203,7 +203,7 @@ class QiyuCoordinateAutomation(
         val deadlineMillis: Long? = null,
     )
 
-    private data class Frame(val fullText: String, val scoreTwoDigit: String, val scoreOneDigit: String, val viewText: String, val openText: String, val slotTexts: List<String>)
+    private data class Frame(val fullText: String, val viewText: String, val openText: String, val slotTexts: List<String>)
     private val handler = Handler(Looper.getMainLooper())
     private val recognizer = TextRecognition.getClient(ChineseTextRecognizerOptions.Builder().build())
     private var runtime = Runtime()
@@ -311,14 +311,13 @@ class QiyuCoordinateAutomation(
     }
 
     private fun recognize(bitmap: Bitmap) {
+        // 盲开模式：不需要识别分数，只提交全屏 + 查看/开启计数 + 规则区
         val images = listOf(
             bitmap,
-            QiyuCoordinateProfile.scoreTwoDigit.crop(bitmap),  // 2位数分数区域
-            QiyuCoordinateProfile.scoreOneDigit.crop(bitmap),  // 1位数分数区域
             QiyuCoordinateProfile.viewCount.crop(bitmap),
             QiyuCoordinateProfile.openCount.crop(bitmap)
         ) + QiyuCoordinateProfile.ruleRegions.map { it.crop(bitmap) }
-        Log.d(TAG, "recognize: 提交 ${images.size} 张图片进行 OCR（全屏 + 分数2位 + 分数1位 + 查看/开启计数 + 5 规则区）")
+        Log.d(TAG, "recognize: 提交 ${images.size} 张图片进行 OCR（全屏 + 查看/开启计数 + 5 规则区）")
         val tasks = images.map { recognizer.process(InputImage.fromBitmap(it, 0)) }
 
         // OCR 超时保护：ML Kit 模型下载/识别挂起时给出明确失败，而不是静默等待
@@ -342,8 +341,8 @@ class QiyuCoordinateAutomation(
                 val r = b.boundingBox
                 "${b.text.replace(Regex("\\s+"), "")}@[${r?.left},${r?.top}-${r?.right},${r?.bottom}]"
             })
-            // texts[1]=2位数区域, texts[2]=1位数区域, texts[3]=查看计数, texts[4]=开启计数, texts[5..9]=规则区
-            consume(Frame(texts[0], texts[1], texts[2], texts[3], texts[4], texts.drop(5)))
+            // texts[1]=查看计数, texts[2]=开启计数, texts[3..7]=规则区
+            consume(Frame(texts[0], texts[1], texts[2], texts.drop(3)))
         }.addOnFailureListener {
             ocrDeadline?.let(handler::removeCallbacks)
             ocrDeadline = null
@@ -358,20 +357,13 @@ class QiyuCoordinateAutomation(
         val page = detectPage(frame)
         // 分数只认宝箱页"当前分数"下方的数字。入口/算卦页分数与奇遇流程无关（实测入口 OCR
         // 会误抓"目标分数823800"），一律忽略；全屏 fallback 会把"剩余次数3"误当成分数，禁用。
-        // 首次识别到分数后持久化，后续不再重新识别（避免规则弹框遮挡导致 score=null）。
-        // 双区域兜底：优先识别2位数区域，失败则使用1位数区域。
-        val score = if (page == Page.CHESTS && runtime.score == null) {
-            parseScore(frame.scoreTwoDigit) ?: parseScore(frame.scoreOneDigit)
-        } else {
-            null  // 已有分数或非宝箱页，不再识别
-        }
+        // 盲开模式：不需要识别分数，跳过分数解析逻辑
         val viewCount = parseCount(frame.viewText, "查看") ?: parseCount(frame.fullText, "查看")
         val openCount = parseCount(frame.openText, "开启") ?: parseCount(frame.fullText, "开启")
-        Log.d(TAG, "consume: stage=${runtime.stage} page=$page score=$score viewRemaining=$viewCount openRemaining=$openCount pendingIndex=${runtime.pendingIndex}")
-        val rawOcr = listOf("全屏=${frame.fullText}", "分数2位=${frame.scoreTwoDigit}", "分数1位=${frame.scoreOneDigit}", "查看=${frame.viewText}", "开启=${frame.openText}") +
+        Log.d(TAG, "consume: stage=${runtime.stage} page=$page viewRemaining=$viewCount openRemaining=$openCount pendingIndex=${runtime.pendingIndex}")
+        val rawOcr = listOf("全屏=${frame.fullText}", "查看=${frame.viewText}", "开启=${frame.openText}") +
             frame.slotTexts.mapIndexed { index, text -> "宝箱${index + 1}=$text" }
         val base = runtime.copy(
-            score = score ?: runtime.score,
             viewRemaining = viewCount ?: runtime.viewRemaining,
             openRemaining = openCount ?: runtime.openRemaining,
             rawOcr = rawOcr.joinToString("\n")
@@ -409,16 +401,28 @@ class QiyuCoordinateAutomation(
                 }
             }
             Stage.CHESTS -> when {
-                // 宝箱页强信号就绪，进入宝箱处理
-                page == Page.CHESTS && base.score != null && base.viewRemaining != null && base.openRemaining != null -> {
+                // 宝箱页强信号就绪，进入宝箱处理（盲开模式：不需要分数，只需要 openRemaining）
+                page == Page.CHESTS && base.openRemaining != null -> {
                     stageRetryCount = 0
                     handleChestPage(base, frame)
                 }
-                // 宝箱页已识别但计数/分数未解析出（OCR 波动）：等待重截，30 秒 deadline 兜底
+                // 宝箱页已识别但 openRemaining 未解析出（OCR 波动）：重试 3 次，超时后使用默认值 10
                 page == Page.CHESTS -> {
-                    stageRetryCount = 0
-                    update(base.copy(message = "宝箱页数据解析中（分数/剩余次数未读到），等待后重截"))
-                    handler.postDelayed({ requestFrame() }, 800L)
+                    if (stageRetryCount < maxStageRetries) {
+                        stageRetryCount++
+                        update(base.copy(message = "宝箱页数据解析中（开启次数未读到 $stageRetryCount/$maxStageRetries）"))
+                        handler.postDelayed({ requestFrame() }, 800L)
+                    } else {
+                        // 超过 3 次重试，使用兜底值：openRemaining = 10
+                        stageRetryCount = 0
+                        val fallbackBase = base.copy(
+                            openRemaining = base.openRemaining ?: 10,
+                            message = "宝箱页数据解析超时，使用默认开启次数 10"
+                        )
+                        Log.w(TAG, "宝箱页数据解析超时，使用兜底值 openRemaining=${fallbackBase.openRemaining}")
+                        update(fallbackBase)
+                        handleChestPage(fallbackBase, frame)
+                    }
                 }
                 // 点击太极图后仍停在算卦页：算卦动画未结束，或点击被入场动画吞掉
                 page == Page.DIVINATION -> {
@@ -433,20 +437,6 @@ class QiyuCoordinateAutomation(
                 }
                 else -> retryOrFail(page, "宝箱页", 1200L)
             }
-            Stage.SELECT_INSPECT -> when {
-                page == Page.CHESTS -> {
-                    stageRetryCount = 0
-                    tap(QiyuCoordinateProfile.inspect, Stage.WAIT_INSPECT, "已点击查看，等待第 ${(base.pendingIndex ?: 0) + 1} 个宝箱规则")
-                }
-                else -> retryOrFail(page, "宝箱页（选中查看后）", 1000L)
-            }
-            Stage.WAIT_INSPECT -> when {
-                page == Page.CHESTS -> {
-                    stageRetryCount = 0
-                    recordInspection(base, frame)
-                }
-                else -> retryOrFail(page, "宝箱页（查看规则后）", 1000L)
-            }
             Stage.SELECT_OPEN -> when {
                 page == Page.CHESTS -> {
                     stageRetryCount = 0
@@ -457,7 +447,9 @@ class QiyuCoordinateAutomation(
             Stage.WAIT_OPEN -> when {
                 page == Page.CHESTS -> {
                     stageRetryCount = 0
-                    verifyOpen(base, frame)
+                    // 盲开模式：开启后直接继续，不验证结果
+                    update(base.copy(message = "第 ${(base.pendingIndex ?: 0) + 1} 个宝箱已开启"))
+                    requestFrame()
                 }
                 else -> retryOrFail(page, "宝箱页（开启后）", 1000L)
             }
@@ -481,7 +473,6 @@ class QiyuCoordinateAutomation(
         val chestCounter = Regex("\\d+\\s*/\\s*\\d+")
         val hasChestCounter = chestCounter.containsMatchIn(frame.viewText) ||
                               chestCounter.containsMatchIn(frame.openText)
-        val hasScore = parseScore(frame.scoreTwoDigit) != null || parseScore(frame.scoreOneDigit) != null
 
         // 第二层：全屏 OCR 容错关键词集合（每页独有强信号优先于共享弱信号）
         val isSettlementText = text.contains("本局得分") ||
@@ -505,8 +496,8 @@ class QiyuCoordinateAutomation(
             isSettlementText -> Page.SETTLEMENT
             // CHESTS：底部按钮组合（实测计数为"剩余次数N"而非 N/M，区域计数信号不可靠）
             hasChestButtons -> Page.CHESTS
-            // CHESTS 次选：区域计数 N/M + score 数字（老布局兜底）
-            hasChestCounter && hasScore -> Page.CHESTS
+            // CHESTS 次选：区域计数 N/M（盲开模式不需要 score 数字）
+            hasChestCounter -> Page.CHESTS
             // ENTRY：关键词命中 + 没有 CHESTS 强信号（双重否定杜绝入口页误识别为 CHESTS）
             isEntryText && !hasChestCounter -> Page.ENTRY
             // DIVINATION：强关键词，或顶部标题弱信号（排除法确认后盲点太极图）
@@ -516,10 +507,29 @@ class QiyuCoordinateAutomation(
     }
 
     private fun handleChestPage(base: Runtime, frame: Frame) {
+        // 盲开模式：直接选择 N 个宝箱（N = 可开启次数），然后点击完成
+        val openCount = base.openRemaining!!
+        val selectedCount = base.plan.size
+        
         when {
-            base.viewRemaining!! > 0 -> selectForInspection(base)
-            base.openRemaining!! > 0 -> selectForOpening(base)
-            else -> tap(QiyuCoordinateProfile.finish, Stage.WAIT_SETTLEMENT, "已点击完成，等待结算弹框")
+            // 还有宝箱需要选择
+            selectedCount < openCount -> {
+                val index = selectedCount  // 按顺序选择：0, 1, 2, ...
+                if (index >= QiyuCoordinateProfile.slots.size) {
+                    fail("需要开启 $openCount 个宝箱，但只配置了 ${QiyuCoordinateProfile.slots.size} 个槽位")
+                    return
+                }
+                // 选中宝箱后立即开启（不等待查看）
+                tap(
+                    QiyuCoordinateProfile.slots[index],
+                    Stage.SELECT_OPEN,
+                    "已选中第 ${index + 1} 个宝箱，准备开启",
+                    plan = base.plan + index,
+                    pendingIndex = index
+                )
+            }
+            // 已选择足够的宝箱，点击完成
+            else -> tap(QiyuCoordinateProfile.finish, Stage.WAIT_SETTLEMENT, "已开启 $openCount 个宝箱，点击完成")
         }
     }
 
@@ -588,10 +598,8 @@ class QiyuCoordinateAutomation(
 
     private fun openSelectedChest(base: Runtime) {
         val index = base.pendingIndex ?: run { fail("开启前缺少选中宝箱槽位"); return }
-        val rule = base.chests.firstOrNull { it.index == index }?.rule ?: run { fail("选中宝箱缺少已识别规则"); return }
-        expectedScore = QiyuScoreSolver.apply(base.score ?: run { fail("开启前缺少分数"); return }, rule)
-        tap(QiyuCoordinateProfile.open, Stage.WAIT_OPEN,
-            "已点击开启第 ${index + 1} 个宝箱，等待分数从 ${base.score} 变为 $expectedScore")
+        // 盲开模式：不需要规则和分数，直接点击开启按钮
+        tap(QiyuCoordinateProfile.open, Stage.WAIT_OPEN, "已点击开启第 ${index + 1} 个宝箱")
     }
 
     private fun verifyOpen(base: Runtime, frame: Frame) {
