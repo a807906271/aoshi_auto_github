@@ -494,12 +494,12 @@ class QiyuCoordinateAutomation(
         return when {
             // SETTLEMENT 独有 "本局得分"，且弹框覆盖当前分数/规则区域
             isSettlementText -> Page.SETTLEMENT
+            // ENTRY：关键词命中优先（入口页可能有天赋技能 N/M 文本，但有"开启奇遇"强特征）
+            isEntryText -> Page.ENTRY
             // CHESTS：底部按钮组合（实测计数为"剩余次数N"而非 N/M，区域计数信号不可靠）
             hasChestButtons -> Page.CHESTS
             // CHESTS 次选：区域计数 N/M（盲开模式不需要 score 数字）
             hasChestCounter -> Page.CHESTS
-            // ENTRY：关键词命中 + 没有 CHESTS 强信号（双重否定杜绝入口页误识别为 CHESTS）
-            isEntryText && !hasChestCounter -> Page.ENTRY
             // DIVINATION：强关键词，或顶部标题弱信号（排除法确认后盲点太极图）
             isDivinationText -> Page.DIVINATION
             else -> Page.UNKNOWN
