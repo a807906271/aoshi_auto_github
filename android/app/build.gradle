@@ -59,13 +59,13 @@ android {
 }
 
 dependencies {
-    // 保留 ML Kit（用于兜底）
+    // ML Kit 中文识别（兜底引擎）
     implementation "com.google.mlkit:text-recognition-chinese:16.0.1"
     
     // PaddleOCR 依赖
     implementation 'com.microsoft.onnxruntime:onnxruntime-android:1.21.1'
-    // OpenCV Android SDK from JitPack
-    implementation 'com.github.QuickBirdEng:opencv-android:4.5.3'
+    // OpenCV 使用 Maven 依赖（替代本地 AAR）
+    implementation 'org.opencv:opencv:4.5.5'
 }
 
 flutter {
