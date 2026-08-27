@@ -64,7 +64,8 @@ dependencies {
     
     // PaddleOCR 依赖
     implementation 'com.microsoft.onnxruntime:onnxruntime-android:1.21.1'
-    implementation 'org.opencv:opencv:4.5.3'
+    // OpenCV Android SDK from JitPack
+    implementation 'com.github.QuickBirdEng:opencv-android:4.5.3'
 }
 
 flutter {
