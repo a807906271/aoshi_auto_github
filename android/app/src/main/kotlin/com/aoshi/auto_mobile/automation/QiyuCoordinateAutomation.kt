@@ -186,7 +186,7 @@ class QiyuCoordinateAutomation(
         private const val POST_TAP_CAPTURE_DELAY_MILLIS = 1_000L
     }
 
-    enum class Stage { ENTRY, DIVINATION, CHESTS, SELECT_OPEN, WAIT_OPEN, WAIT_SETTLEMENT, FAILED }
+    enum class Stage { ENTRY, DIVINATION, CHESTS, SELECT_INSPECT, WAIT_INSPECT, SELECT_OPEN, WAIT_OPEN, WAIT_SETTLEMENT, FAILED }
 
     data class ChestResult(val index: Int, val rawText: String, val rule: QiyuRule?)
     data class Runtime(
@@ -201,11 +201,15 @@ class QiyuCoordinateAutomation(
         val completedRounds: Int = 0,
         val rawOcr: String = "",
         val deadlineMillis: Long? = null,
+        val ocrFailCount: Int = 0,
     )
 
     private data class Frame(val fullText: String, val viewText: String, val openText: String, val slotTexts: List<String>)
     private val handler = Handler(Looper.getMainLooper())
     private val recognizer = TextRecognition.getClient(ChineseTextRecognizerOptions.Builder().build())
+    private val paddleOcr = PaddleOcrEngine(service.applicationContext)
+    private var usePaddleOcr = true
+    private val scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Main + kotlinx.coroutines.SupervisorJob())
     private var runtime = Runtime()
     private var captureQueued = false
     private var actionDeadline: Runnable? = null
@@ -221,7 +225,19 @@ class QiyuCoordinateAutomation(
     private var stageRetryCount = 0
     private val maxStageRetries = 3
 
-    fun start() = requestFrame()
+    fun start() {
+        // 异步初始化 PaddleOCR，失败则降级到 ML Kit
+        scope.launch {
+            try {
+                paddleOcr.initialize()
+                Log.d(TAG, "start: PaddleOCR 初始化成功")
+            } catch (e: Exception) {
+                Log.w(TAG, "start: PaddleOCR 初始化失败，降级到 ML Kit", e)
+                usePaddleOcr = false
+            }
+        }
+        requestFrame()
+    }
 
     fun stop() {
         actionDeadline?.let(handler::removeCallbacks)
@@ -231,6 +247,8 @@ class QiyuCoordinateAutomation(
         gestureTimeout?.let(handler::removeCallbacks)
         gestureTimeout = null
         recognizer.close()
+        paddleOcr.release()
+        scope.cancel()
     }
 
     fun runtimeJson(): JSONObject = JSONObject().apply {
@@ -353,6 +371,41 @@ class QiyuCoordinateAutomation(
         }
     }
 
+    /**
+     * 单张图片 OCR 识别，支持 PaddleOCR + ML Kit 双引擎
+     * @param bitmap 待识别的图片（规则区域裁剪后的小图）
+     * @return 识别出的文本
+     */
+    private suspend fun recognizeSingle(bitmap: Bitmap): String = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+        try {
+            if (usePaddleOcr && paddleOcr.isInitialized()) {
+                // 使用 PaddleOCR 引擎
+                val results = paddleOcr.recognize(bitmap)
+                if (results.isNotEmpty()) {
+                    val text = results.joinToString(" ") { it.text }
+                    Log.d(TAG, "recognizeSingle: PaddleOCR 识别成功: $text")
+                    return@withContext text
+                }
+                Log.d(TAG, "recognizeSingle: PaddleOCR 未检测到文本，降级到 ML Kit")
+            }
+            
+            // 降级到 ML Kit
+            val inputImage = InputImage.fromBitmap(bitmap, 0)
+            val result = Tasks.await(recognizer.process(inputImage))
+            val text = result.text
+            Log.d(TAG, "recognizeSingle: ML Kit 识别结果: $text")
+            text
+        } catch (e: Exception) {
+            Log.e(TAG, "recognizeSingle: OCR 识别异常", e)
+            // PaddleOCR 失败则永久降级到 ML Kit
+            if (usePaddleOcr) {
+                usePaddleOcr = false
+                Log.w(TAG, "recognizeSingle: PaddleOCR 识别异常，永久降级到 ML Kit")
+            }
+            ""
+        }
+    }
+
     private fun consume(frame: Frame) {
         val page = detectPage(frame)
         // 分数只认宝箱页"当前分数"下方的数字。入口/算卦页分数与奇遇流程无关（实测入口 OCR
@@ -437,6 +490,20 @@ class QiyuCoordinateAutomation(
                 }
                 else -> retryOrFail(page, "宝箱页", 1200L)
             }
+            Stage.SELECT_INSPECT -> when {
+                page == Page.CHESTS -> {
+                    stageRetryCount = 0
+                    tap(QiyuCoordinateProfile.inspect, Stage.WAIT_INSPECT, "已点击查看按钮")
+                }
+                else -> retryOrFail(page, "宝箱页（选中查看后）", 1000L)
+            }
+            Stage.WAIT_INSPECT -> when {
+                page == Page.CHESTS -> {
+                    stageRetryCount = 0
+                    recordInspection(base, frame)
+                }
+                else -> retryOrFail(page, "宝箱页（查看规则后）", 1000L)
+            }
             Stage.SELECT_OPEN -> when {
                 page == Page.CHESTS -> {
                     stageRetryCount = 0
@@ -506,30 +573,150 @@ class QiyuCoordinateAutomation(
         }
     }
 
-    private fun handleChestPage(base: Runtime, frame: Frame) {
-        // 盲开模式：直接选择 N 个宝箱（N = 可开启次数），然后点击完成
-        val openCount = base.openRemaining!!
-        val selectedCount = base.plan.size
+    private fun selectForInspection(base: Runtime) {
+        val inspected = base.chests.size
+        if (inspected >= QiyuCoordinateProfile.slots.size) {
+            fail("已查看 $inspected 个宝箱，超过槽位数量")
+            return
+        }
+        tap(
+            QiyuCoordinateProfile.slots[inspected],
+            Stage.SELECT_INSPECT,
+            "已选中第 ${inspected + 1} 个宝箱，准备查看规则",
+            pendingIndex = inspected
+        )
+    }
+
+    private fun recordInspection(base: Runtime, frame: Frame) {
+        val index = base.pendingIndex ?: run {
+            fail("recordInspection 调用时 pendingIndex 为空")
+            return
+        }
         
-        when {
-            // 还有宝箱需要选择
-            selectedCount < openCount -> {
-                val index = selectedCount  // 按顺序选择：0, 1, 2, ...
-                if (index >= QiyuCoordinateProfile.slots.size) {
-                    fail("需要开启 $openCount 个宝箱，但只配置了 ${QiyuCoordinateProfile.slots.size} 个槽位")
-                    return
+        if (index >= QiyuCoordinateProfile.ruleRegions.size) {
+            fail("宝箱索引 $index 超出规则区域配置范围")
+            return
+        }
+        
+        val region = QiyuCoordinateProfile.ruleRegions[index]
+        val cropped = region.crop(frame.bitmap)
+        
+        scope.launch {
+            val rawText = recognizeSingle(cropped)
+            val rule = QiyuRuleParser.parse(rawText)
+            
+            if (rule == null) {
+                val failCount = base.ocrFailCount + 1
+                Log.w(TAG, "OCR 规则识别失败 ($failCount/3): $rawText")
+                
+                if (failCount >= 3) {
+                    update(base.copy(
+                        stage = Stage.CHESTS,
+                        message = "OCR 连续失败 3 次，切换到盲开模式",
+                        chests = emptyList(),
+                        ocrFailCount = failCount
+                    ))
+                    handler.post { requestFrame() }
+                } else {
+                    update(base.copy(
+                        stage = Stage.CHESTS,
+                        message = "规则识别失败，重试查看",
+                        ocrFailCount = failCount
+                    ))
+                    handler.postDelayed({ requestFrame() }, 1000L)
                 }
-                // 选中宝箱后立即开启（不等待查看）
-                tap(
-                    QiyuCoordinateProfile.slots[index],
-                    Stage.SELECT_OPEN,
-                    "已选中第 ${index + 1} 个宝箱，准备开启",
-                    plan = base.plan + index,
-                    pendingIndex = index
-                )
+                return@launch
             }
-            // 已选择足够的宝箱，点击完成
-            else -> tap(QiyuCoordinateProfile.finish, Stage.WAIT_SETTLEMENT, "已开启 $openCount 个宝箱，点击完成")
+            
+            val newChests = base.chests + ChestResult(index, rawText, rule)
+            val viewRemaining = base.viewRemaining!! - 1
+            
+            if (viewRemaining > 0 && newChests.size < QiyuCoordinateProfile.slots.size) {
+                update(base.copy(
+                    stage = Stage.CHESTS,
+                    message = "已记录第 ${index + 1} 个宝箱规则，剩余查看次数 $viewRemaining",
+                    chests = newChests,
+                    viewRemaining = viewRemaining,
+                    pendingIndex = null,
+                    ocrFailCount = 0
+                ))
+            } else {
+                update(base.copy(
+                    stage = Stage.CHESTS,
+                    message = "已完成查看，准备计算最优方案",
+                    chests = newChests,
+                    viewRemaining = viewRemaining,
+                    pendingIndex = null,
+                    ocrFailCount = 0
+                ))
+            }
+            handler.post { requestFrame() }
+        }
+    }
+
+    private fun selectForOpening(base: Runtime) {
+        val rulesMap = base.chests.mapNotNull { chest ->
+            chest.rule?.let { chest.index to it }
+        }.toMap()
+        
+        if (rulesMap.isEmpty()) {
+            fail("无有效规则，无法计算最优方案")
+            return
+        }
+        
+        val result = QiyuScoreSolver.bestPlan(
+            base.score ?: BigInteger.ZERO,
+            rulesMap,
+            base.openRemaining!!
+        )
+        
+        if (result == null || result.order.isEmpty()) {
+            fail("计算最优方案失败或返回空列表")
+            return
+        }
+        
+        val index = result.order.first()
+        tap(
+            QiyuCoordinateProfile.slots[index],
+            Stage.SELECT_OPEN,
+            "已选中第 ${index + 1} 个宝箱（最优方案：${result.order.joinToString()}），准备开启",
+            plan = result.order,
+            pendingIndex = index
+        )
+    }
+
+    private fun handleChestPage(base: Runtime, frame: Frame) {
+        when {
+            base.viewRemaining!! > 0 && base.ocrFailCount < 3 -> {
+                if (base.chests.size < base.viewRemaining.coerceAtMost(QiyuCoordinateProfile.slots.size)) {
+                    selectForInspection(base)
+                } else {
+                    selectForOpening(base)
+                }
+            }
+            base.openRemaining!! > 0 -> {
+                val openCount = base.openRemaining
+                val selectedCount = base.plan.size
+                
+                when {
+                    selectedCount < openCount -> {
+                        val index = selectedCount
+                        if (index >= QiyuCoordinateProfile.slots.size) {
+                            fail("需要开启 $openCount 个宝箱，但只配置了 ${QiyuCoordinateProfile.slots.size} 个槽位")
+                            return
+                        }
+                        tap(
+                            QiyuCoordinateProfile.slots[index],
+                            Stage.SELECT_OPEN,
+                            "盲开模式：已选中第 ${index + 1} 个宝箱",
+                            plan = base.plan + index,
+                            pendingIndex = index
+                        )
+                    }
+                    else -> tap(QiyuCoordinateProfile.finish, Stage.WAIT_SETTLEMENT, "已开启 $openCount 个宝箱，点击完成")
+                }
+            }
+            else -> tap(QiyuCoordinateProfile.finish, Stage.WAIT_SETTLEMENT, "已点击完成")
         }
     }
 
@@ -675,6 +862,7 @@ class QiyuCoordinateAutomation(
 
     private fun stageLabel(stage: Stage): String = when (stage) {
         Stage.ENTRY -> "奇遇入口"; Stage.DIVINATION -> "算卦页"; Stage.CHESTS -> "宝箱页"
+        Stage.SELECT_INSPECT -> "查看宝箱选中"; Stage.WAIT_INSPECT -> "查看规则"
         Stage.SELECT_OPEN -> "开启宝箱选中"
         Stage.WAIT_OPEN -> "开启结果"; Stage.WAIT_SETTLEMENT -> "结算弹框"; Stage.FAILED -> "失败状态"
     }

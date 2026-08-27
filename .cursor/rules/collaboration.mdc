@@ -1,0 +1,35 @@
+---
+description: 傲世自动化项目的开发协作规范（打包、adb 调试、环境约束）
+globs: *.kt, *.dart, *.md, *.yml, *.yaml
+---
+
+# 项目协作规范
+
+## 打包与发布（AI 不参与）
+
+- 应用打包由 **git push → GitHub Actions** 完成，开发者自行推送与安装 APK。
+- AI 只负责代码修改与日志分析，不执行打包相关操作。
+- 每次代码变更后的验证闭环依赖开发者完成 push → 打包 → 安装。
+
+## adb 调试协作模式（AI 无设备权限）
+
+AI 无法直接执行 adb 命令，固定采用以下闭环：
+
+1. AI 提供 adb 命令（PowerShell 环境）
+2. 开发者执行，并将终端输出**原样完整粘贴**回传（不截断、不转述）
+3. AI 分析输出，定位问题，给出下一步命令或修复方案
+
+### 编码约定（Windows）
+
+- 执行含中文输出的 logcat 前先切换 UTF-8：`chcp 65001`
+- PowerShell 备选：`[Console]::OutputEncoding = [System.Text.Encoding]::UTF8`
+- 日志**禁止落盘**（重定向文件易乱码），直接终端打印后粘贴；除非 AI 明确要求写文件
+
+## 已知环境约束
+
+- 目标游戏：傲世西游 `com.tencent.JWX`
+- 真机：vivo / Funtouch OS，存在系统级无障碍手势限制
+- 游戏无障碍通道不可靠：
+  - `dispatchGesture` 可能 accepted=true 但永不执行、永不回调
+  - `performAction(ACTION_CLICK)` 可能因自绘渲染无节点树而失效
+- 详细调试流程见 `DEBUG_WORKFLOW.md`

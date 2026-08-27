@@ -59,7 +59,12 @@ android {
 }
 
 dependencies {
+    // 保留 ML Kit（用于兜底）
     implementation "com.google.mlkit:text-recognition-chinese:16.0.1"
+    
+    // PaddleOCR 依赖
+    implementation 'com.microsoft.onnxruntime:onnxruntime-android:1.21.1'
+    implementation 'org.opencv:opencv:4.5.3'
 }
 
 flutter {
