@@ -64,8 +64,8 @@ dependencies {
     
     // PaddleOCR 依赖
     implementation 'com.microsoft.onnxruntime:onnxruntime-android:1.21.1'
-    // OpenCV 使用 Maven 依赖（替代本地 AAR）
-    implementation 'org.opencv:opencv:4.5.5'
+    // OpenCV 使用第三方维护的 Maven 包
+    implementation 'com.quickbirdstudios:opencv-contrib:4.5.3.0'
 }
 
 flutter {
