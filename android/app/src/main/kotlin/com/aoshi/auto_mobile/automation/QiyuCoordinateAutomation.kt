@@ -20,6 +20,12 @@ import java.math.BigInteger
 import java.math.RoundingMode
 import org.json.JSONArray
 import org.json.JSONObject
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.cancel
 
 /**
  * 奇遇游戏画面坐标档案。所有值以 460 × 1024 基准归一化，运行时按截图尺寸缩放。
@@ -204,7 +210,7 @@ class QiyuCoordinateAutomation(
         val ocrFailCount: Int = 0,
     )
 
-    private data class Frame(val fullText: String, val viewText: String, val openText: String, val slotTexts: List<String>)
+    private data class Frame(val fullText: String, val viewText: String, val openText: String, val slotTexts: List<String>, val bitmap: Bitmap)
     private val handler = Handler(Looper.getMainLooper())
     private val recognizer = TextRecognition.getClient(ChineseTextRecognizerOptions.Builder().build())
     private val paddleOcr = PaddleOcrEngine(service.applicationContext)
@@ -352,7 +358,7 @@ class QiyuCoordinateAutomation(
             ocrDeadline?.let(handler::removeCallbacks)
             ocrDeadline = null
             images.drop(1).forEach(Bitmap::recycle)
-            bitmap.recycle()
+            // 不立即 recycle bitmap，因为 Frame 需要引用它进行规则裁剪
             val texts = values.map { it.text }
             Log.d(TAG, "recognize: OCR 完成，全屏=${texts[0].replace(Regex("\\s+"), "").take(80)}")
             Log.d(TAG, "recognize: 文本块坐标=" + values[0].textBlocks.take(60).joinToString(" | ") { b ->
@@ -360,7 +366,7 @@ class QiyuCoordinateAutomation(
                 "${b.text.replace(Regex("\\s+"), "")}@[${r?.left},${r?.top}-${r?.right},${r?.bottom}]"
             })
             // texts[1]=查看计数, texts[2]=开启计数, texts[3..7]=规则区
-            consume(Frame(texts[0], texts[1], texts[2], texts.drop(3)))
+            consume(Frame(texts[0], texts[1], texts[2], texts.drop(3), bitmap))
         }.addOnFailureListener {
             ocrDeadline?.let(handler::removeCallbacks)
             ocrDeadline = null
@@ -529,6 +535,11 @@ class QiyuCoordinateAutomation(
             }
             Stage.FAILED -> Unit
         }
+        
+        // 处理完成后 recycle bitmap（除了 WAIT_INSPECT 阶段，bitmap 在 recordInspection 的协程中使用）
+        if (runtime.stage != Stage.WAIT_INSPECT) {
+            frame.bitmap.recycle()
+        }
     }
 
     private enum class Page { ENTRY, DIVINATION, CHESTS, SETTLEMENT, UNKNOWN }
@@ -603,6 +614,7 @@ class QiyuCoordinateAutomation(
         
         scope.launch {
             val rawText = recognizeSingle(cropped)
+            cropped.recycle()  // 使用完毕后 recycle 裁剪后的 bitmap
             val rule = QiyuRuleParser.parse(rawText)
             
             if (rule == null) {
