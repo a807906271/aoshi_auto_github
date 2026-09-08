@@ -9,6 +9,9 @@ import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import android.view.accessibility.AccessibilityWindowInfo
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -120,7 +123,7 @@ class AoshiAccessibilityService : AccessibilityService() {
         // 初始化 PaddleOCR 引擎（用于闯塔任务）
         paddleOcr = PaddleOcrEngine(this)
         // PaddleOCR 初始化需要在协程中执行
-        kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
+        CoroutineScope(Dispatchers.IO).launch {
             try {
                 paddleOcr.initialize()
                 Log.i(TAG, "onServiceConnected: PaddleOCR 初始化成功")
