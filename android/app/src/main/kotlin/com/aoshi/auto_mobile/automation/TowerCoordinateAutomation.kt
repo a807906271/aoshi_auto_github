@@ -141,73 +141,49 @@ class TowerCoordinateAutomation(
     private fun requestFrame() {
         if (!isRunning || captureInProgress) return
         captureInProgress = true
-        scope.launch {
-            try {
-                val bitmap = captureScreen()
-                if (bitmap != null) {
-                    processFrame(bitmap)
-                    bitmap.recycle()
-                } else {
-                    withContext(Dispatchers.Main) {
-                        fail("截图失败")
-                    }
-                }
-            } catch (e: Exception) {
-                Log.e(TAG, "requestFrame: 异常", e)
-                withContext(Dispatchers.Main) {
-                    fail("截图异常: ${e.message}")
-                }
-            } finally {
-                captureInProgress = false
-            }
+        
+        if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.R) {
+            fail("系统版本低于 Android 11，无法通过无障碍服务获取截图")
+            return
         }
-    }
-    
-    private suspend fun captureScreen(): Bitmap? {
-        return withContext(Dispatchers.IO) {
-            try {
-                // 使用与 QiyuCoordinateAutomation 相同的截图方法
-                val display = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
-                    service.display
-                } else {
-                    @Suppress("DEPRECATION")
-                    service.getSystemService(android.view.WindowManager::class.java)
-                        ?.defaultDisplay
-                } ?: return@withContext null
-                
-                val metrics = service.resources.displayMetrics
-                val width = metrics.widthPixels
-                val height = metrics.heightPixels
-                
-                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
-                    val hardwareBuffer = android.media.ImageReader.newInstance(
-                        width, height,
-                        android.graphics.PixelFormat.RGBA_8888, 2
-                    ).use { reader ->
-                        display.getDisplayedContentSample(
-                            reader.width, reader.height,
-                            reader.surface, 0
-                        )
-                        reader.acquireLatestImage()?.use { image ->
-                            val planes = image.planes
-                            if (planes.isNotEmpty()) {
-                                val buffer = planes[0].buffer
-                                val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
-                                bitmap.copyPixelsFromBuffer(buffer)
-                                bitmap
-                            } else null
+        
+        service.takeScreenshot(
+            android.view.Display.DEFAULT_DISPLAY,
+            service.mainExecutor,
+            object : AccessibilityService.TakeScreenshotCallback {
+                override fun onSuccess(screenshot: AccessibilityService.ScreenshotResult) {
+                    captureInProgress = false
+                    val buffer = screenshot.hardwareBuffer
+                    val bitmap = Bitmap.wrapHardwareBuffer(buffer, screenshot.colorSpace)
+                        ?.copy(Bitmap.Config.ARGB_8888, false)
+                    buffer.close()
+                    
+                    if (bitmap == null) {
+                        Log.e(TAG, "截图转换失败")
+                        fail("截图转换失败")
+                    } else {
+                        Log.d(TAG, "截图成功 ${bitmap.width}x${bitmap.height}")
+                        scope.launch {
+                            try {
+                                processFrame(bitmap)
+                                bitmap.recycle()
+                            } catch (e: Exception) {
+                                Log.e(TAG, "processFrame: 异常", e)
+                                withContext(Dispatchers.Main) {
+                                    fail("处理截图异常: ${e.message}")
+                                }
+                            }
                         }
                     }
-                    hardwareBuffer
-                } else {
-                    // API < 30 fallback: 使用 UiAutomation (需要在 AccessibilityService 中配置)
-                    null
                 }
-            } catch (e: Exception) {
-                Log.e(TAG, "captureScreen: 异常", e)
-                null
+                
+                override fun onFailure(errorCode: Int) {
+                    captureInProgress = false
+                    Log.e(TAG, "截图失败: errorCode=$errorCode")
+                    fail("无法获取游戏截图，错误码 $errorCode")
+                }
             }
-        }
+        )
     }
     
     private suspend fun processFrame(bitmap: Bitmap) {
@@ -225,9 +201,10 @@ class TowerCoordinateAutomation(
         return withContext(Dispatchers.IO) {
             try {
                 val cropped = region.crop(bitmap)
-                val result = paddleOcr.recognize(cropped)
+                val results = paddleOcr.recognize(cropped)
                 cropped.recycle()
-                result.text
+                // 将所有识别结果拼接成文本
+                results.joinToString(" ") { it.text }
             } catch (e: Exception) {
                 Log.e(TAG, "recognizeRegion: OCR 异常", e)
                 ""

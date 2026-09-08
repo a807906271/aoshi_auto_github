@@ -119,7 +119,15 @@ class AoshiAccessibilityService : AccessibilityService() {
         
         // 初始化 PaddleOCR 引擎（用于闯塔任务）
         paddleOcr = PaddleOcrEngine(this)
-        paddleOcr.initialize()
+        // PaddleOCR 初始化需要在协程中执行
+        kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
+            try {
+                paddleOcr.initialize()
+                Log.i(TAG, "onServiceConnected: PaddleOCR 初始化成功")
+            } catch (e: Exception) {
+                Log.e(TAG, "onServiceConnected: PaddleOCR 初始化失败", e)
+            }
+        }
 
         // 在系统已加载的 ServiceInfo 基础上补充运行时配置，
         // 保留 manifest 中的 canTakeScreenshot / canRetrieveWindowContent / settingsActivity。
