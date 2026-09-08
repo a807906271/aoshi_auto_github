@@ -65,6 +65,8 @@ class AoshiAccessibilityService : AccessibilityService() {
     // 流程引擎
     private lateinit var gameFlows: GameFlows
     private var qiyuCoordinateAutomation: QiyuCoordinateAutomation? = null
+    private var towerCoordinateAutomation: TowerCoordinateAutomation? = null
+    private lateinit var paddleOcr: PaddleOcrEngine
     
     // 当前状态
     private var qiyuPhase: GameFlows.QiyuPhase = GameFlows.QiyuPhase.WaitStart
@@ -114,6 +116,10 @@ class AoshiAccessibilityService : AccessibilityService() {
         Log.i(TAG, "onServiceConnected: 服务已连接")
         instance = this
         gameFlows = GameFlows()
+        
+        // 初始化 PaddleOCR 引擎（用于闯塔任务）
+        paddleOcr = PaddleOcrEngine(this)
+        paddleOcr.initialize()
 
         // 在系统已加载的 ServiceInfo 基础上补充运行时配置，
         // 保留 manifest 中的 canTakeScreenshot / canRetrieveWindowContent / settingsActivity。
@@ -163,7 +169,7 @@ class AoshiAccessibilityService : AccessibilityService() {
         if (event == null) return
         Log.d(TAG, "onAccessibilityEvent: type=${event.eventType} pkg=${event.packageName} flow=$currentFlow isRunning=$isRunning")
         if (!isRunning || flowStartDeadlineMillis != null) return
-        // 奇遇流程使用坐标自动化，不依赖无障碍事件驱动状态机
+        // 奇遇/闯塔流程使用坐标自动化，不依赖无障碍事件驱动状态机
         // 但仍需要焦点丢失检测，所以不在此处 return
         if (event.packageName?.toString() == packageName) return
         
@@ -207,7 +213,7 @@ class AoshiAccessibilityService : AccessibilityService() {
         }
 
         // 奇遇流程使用坐标自动化，不依赖事件驱动状态机
-        if (currentFlow == "qiyu") return
+        if (currentFlow == "qiyu" || currentFlow == "tower") return
 
         // 只处理已锁定游戏窗口的变化；本应用及其他应用的事件不能推进游戏状态机。
         if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED ||
@@ -286,8 +292,26 @@ class AoshiAccessibilityService : AccessibilityService() {
         isRunning = true
         towerPhase = GameFlows.TowerPhase.ResolveBranch
         targetGamePackageName = "com.tencent.JWX"  // 设置目标游戏包名（傲世西游）
-        resetRuntime("请在 3 秒内切回游戏，随后开始识别", "running")
+        resetRuntime("请立即切换到游戏的闯塔入口界面，4秒后自动开始识别", "running")
         gameFlows.resetTower()
+        
+        towerCoordinateAutomation?.stop()
+        towerCoordinateAutomation = TowerCoordinateAutomation(
+            service = this,
+            paddleOcr = paddleOcr,
+            onUpdate = { runtime ->
+                try {
+                    val stage = runtime.getString("stage")
+                    towerPhase = toTowerPhase(stage)
+                    lastMessage = runtime.optString("message", "")
+                    lastStatus = if (stage == "DONE" || stage == "FAILED") "idle" else "running"
+                    lastError = runtime.optString("failureReason", null)
+                    notifyStatus(lastStatus, lastMessage)
+                } catch (e: Exception) {
+                    Log.e(TAG, "startTower: 解析闯塔运行时异常", e)
+                }
+            }
+        )
 
         scheduleFlowStart("tower")
         Log.i(TAG, "startTower: 目标游戏包名已设置为 $targetGamePackageName")
@@ -300,6 +324,8 @@ class AoshiAccessibilityService : AccessibilityService() {
     fun stopFlow(): JSONObject {
         qiyuCoordinateAutomation?.stop()
         qiyuCoordinateAutomation = null
+        towerCoordinateAutomation?.stop()
+        towerCoordinateAutomation = null
         isRunning = false
         currentFlow = null
         lastStatus = "idle"
@@ -367,6 +393,15 @@ class AoshiAccessibilityService : AccessibilityService() {
                     timeoutHandler.postDelayed({
                         if (isRunning && currentFlow == "qiyu") {
                             qiyuCoordinateAutomation?.start()
+                        }
+                    }, 1000)
+                } else if (flow == "tower") {
+                    // 闯塔流程：等待1秒后启动
+                    lastMessage = "等待游戏界面稳定..."
+                    notifyStatus("running", lastMessage)
+                    timeoutHandler.postDelayed({
+                        if (isRunning && currentFlow == "tower") {
+                            towerCoordinateAutomation?.start()
                         }
                     }, 1000)
                 } else {
@@ -655,6 +690,17 @@ class AoshiAccessibilityService : AccessibilityService() {
         QiyuCoordinateAutomation.Stage.WAIT_SETTLEMENT -> GameFlows.QiyuPhase.ConfirmReward
         QiyuCoordinateAutomation.Stage.FAILED -> GameFlows.QiyuPhase.Failed("截图流程失败")
         else -> GameFlows.QiyuPhase.WaitStart
+    }
+    
+    private fun toTowerPhase(stage: String): GameFlows.TowerPhase = when (stage) {
+        "ENTRY" -> GameFlows.TowerPhase.EnterBattle
+        "BATTLE" -> GameFlows.TowerPhase.RevealSkip
+        "REVEAL_SKIP" -> GameFlows.TowerPhase.SkipBattle
+        "SKIP_CONFIRM" -> GameFlows.TowerPhase.ConfirmSkip
+        "BRANCH" -> GameFlows.TowerPhase.ResolveBranch
+        "DONE" -> GameFlows.TowerPhase.Done
+        "FAILED" -> GameFlows.TowerPhase.Failed("闯塔流程失败")
+        else -> GameFlows.TowerPhase.ResolveBranch
     }
 
     private fun qiyuRuntimeJson(): JSONObject {
