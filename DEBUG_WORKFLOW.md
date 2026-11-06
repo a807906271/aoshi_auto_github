@@ -46,7 +46,9 @@
   # 验证是否真的绑定成功
   adb shell dumpsys accessibility | grep -i "Aoshi Auto"
   ```
-- **已知风险位**：`dumpsys accessibility` 显示 `capabilities=161`，缺少 `CAN_REQUEST_TAKE_SCREENSHOT(0x40)`，而 `res/xml` 已声明 `canTakeScreenshot="true"`。奇遇/闯塔流程依赖 `takeScreenshot()`，此能力缺失会导致截图失败（详见下文「截图能力」章节）。
+- **截图能力（2026-11-06 实测已排除）**：`dumpsys accessibility` 显示 `capabilities=161` 缺少 `CAN_REQUEST_TAKE_SCREENSHOT(0x40)`，服务日志自报 `canTakeScreenshot=false`——但这是服务内反射读取 `getCanTakeScreenshot()` 的误报，**实际 `takeScreenshot()` 每次成功**（`截图成功 1260x2800`），不要被这两条日志误导。
+- **真正的硬阻断（2026-11-06 实锤）**：零长度 60ms 瞬时 `dispatchGesture` 被傲世西游静默丢弃——accepted=true、onCompleted 正常，游戏零反应；同坐标 `adb input tap` 立即生效。对策：`QiyuCoordinateAutomation.tapStyleIndex` 手势样式梯度（零长度→6px 微移动 150ms→3px 400ms），页面验证驱动升级并记住生效样式；全部失效即判定通道被拦截，转 Shizuku input 通道（见 `QiyuCoordinateAutomation.kt` 类注释备选 B）。
+- **测试操作要点**：游戏含 vivo 应用分身，`am start` 显式组件会弹 `DoubleAppResolverActivity`（本体图标在竖屏坐标 ≈179,2468）；游戏会强制横屏，切回 Aoshi 应用前先 `settings put system user_rotation 0` 锁竖屏，否则 Flutter 卡片区域被裁剪、启动按钮不可见。
 
 ### 3. 已知环境约束
 - 目标游戏（傲世西游 `com.tencent.JWX`）的**无障碍通道不可靠**：

@@ -171,6 +171,10 @@ object QiyuScoreSolver {
  * 1. dispatchGesture 可能被系统接受后既不执行也不回调（vivo/Funtouch 设备实测：accepted=true
  *    但 onCompleted/onCancelled 均不触发，游戏无响应，无超时保护时状态机静默冻结）。
  * 2. performAction(ACTION_CLICK) 也可能失效（游戏自绘渲染时节点树不可用）。
+ * 3. 【2026-11-06 vivo V2415A / Android 15 实测新增】dispatchGesture accepted=true 且
+ *    onCompleted 正常回调，但零长度 60ms 瞬时手势被游戏静默丢弃（同坐标 adb input tap 正常命中）。
+ *    对策：tapStyleIndex 手势样式梯度（零长度→微移动→长按式），页面验证驱动升级并记住生效样式；
+ *    全部样式失效即判定 dispatchGesture 通道被整体拦截。
  * 因此所有点击必须自带"手势回调超时兜底 + 自动重试 + 强制推进后截图验证"，
  * 且坐标档案已通过 adb input tap 对照校准（命中验证以 OCR 文本块坐标为基准）。
  * 若上述兜底仍系统性失效（重试后页面始终不变，说明手势通道被整体拦截），
@@ -190,6 +194,8 @@ class QiyuCoordinateAutomation(
         private const val MAX_GESTURE_RETRIES = 1
         // 点击完成后到下一节点截图验证的预留时间：页面切换/动画需要时间，提前截图会误判页面
         private const val POST_TAP_CAPTURE_DELAY_MILLIS = 1_000L
+        // 点击手势样式数量（见 tapStyleIndex 注释）
+        private const val TAP_STYLE_COUNT = 3
     }
 
     enum class Stage { ENTRY, DIVINATION, CHESTS, SELECT_INSPECT, WAIT_INSPECT, SELECT_OPEN, WAIT_OPEN, WAIT_SETTLEMENT, FAILED }
@@ -230,6 +236,28 @@ class QiyuCoordinateAutomation(
     // 阶段重试计数器：记录当前阶段等待目标页面的重试次数（页面未识别或识别为错误页面时递增）
     private var stageRetryCount = 0
     private val maxStageRetries = 3
+
+    // ── 点击手势样式梯度 ─────────────────────────────────────────────
+    // vivo V2415A + 傲世西游 实测（2026-11-06）：零长度 60ms 瞬时手势 dispatchGesture
+    // accepted=true 且 onCompleted 正常回调，但游戏毫无反应；同坐标 adb input tap 正常命中。
+    // 疑似游戏引擎/OEM 输入管线丢弃零长度注入手势。样式 0 失败后逐级升级：
+    //   0 = 零长度 60ms（旧行为）
+    //   1 = 6px 微移动 150ms
+    //   2 = 3px 微移动 400ms（长按式）
+    // 页面验证通过的样式会被记住并跨阶段复用；全部样式穷尽后按原逻辑失败，
+    // 失败即意味着 dispatchGesture 通道被整体拦截，应转入 Shizuku input 通道（见类注释备选 B）。
+    private var tapStyleIndex = 0
+    private var tapEscalationLeft = TAP_STYLE_COUNT - 1
+    private var lastTapAction: TapAction? = null
+
+    private data class TapAction(
+        val point: QiyuCoordinateProfile.Point,
+        val nextStage: Stage,
+        val message: String,
+        val plan: List<Int>,
+        val pendingIndex: Int?,
+        val completedRounds: Int,
+    )
 
     fun start() {
         // 异步初始化 PaddleOCR，失败则降级到 ML Kit
@@ -745,7 +773,29 @@ class QiyuCoordinateAutomation(
             handler.postDelayed({ requestFrame() }, retryDelayMillis)
         } else {
             stageRetryCount = 0
-            unknown(page)
+            // 点击已发出（甚至 onCompleted）但页面停在别处：优先升级点击手势样式并回退到
+            // 实际页面重新驱动，而不是直接失败。全部样式穷尽后才走 unknown() 失败。
+            val recoveryStage = when (page) {
+                Page.ENTRY -> Stage.ENTRY
+                Page.DIVINATION -> Stage.DIVINATION
+                Page.CHESTS -> Stage.CHESTS
+                Page.SETTLEMENT -> Stage.WAIT_SETTLEMENT
+                Page.UNKNOWN -> null
+            }
+            if (recoveryStage != null && tapEscalationLeft > 0) {
+                tapEscalationLeft--
+                tapStyleIndex = (tapStyleIndex + 1) % TAP_STYLE_COUNT
+                Log.w(TAG, "点击后页面停留在 $page（期望 $expectedPageName），升级点击手势样式 → $tapStyleIndex，" +
+                    "状态机回退到实际页面重试（剩余升级预算 $tapEscalationLeft）")
+                update(runtime.copy(
+                    stage = recoveryStage,
+                    message = "点击未生效，切换手势样式$tapStyleIndex 后按当前页面重试",
+                    deadlineMillis = null,
+                ))
+                handler.postDelayed({ requestFrame() }, 800L)
+            } else {
+                unknown(page)
+            }
         }
     }
 
@@ -765,6 +815,8 @@ class QiyuCoordinateAutomation(
     ) {
         Log.d(TAG, "tap: 发起点击 (${point.x}, ${point.y}) → $nextStage，$message")
         gestureRetryCount = 0
+        // 新的指令性点击：页面验证已通过，重置手势样式升级预算（保留已验证生效的 tapStyleIndex）
+        tapEscalationLeft = TAP_STYLE_COUNT - 1
         doTap(point, nextStage, message, plan, pendingIndex, completedRounds)
     }
 
@@ -777,18 +829,31 @@ class QiyuCoordinateAutomation(
         completedRounds: Int,
     ) {
         gestureCallbackReceived = false
+        lastTapAction = TapAction(point, nextStage, message, plan, pendingIndex, completedRounds)
+        val width = service.resources.displayMetrics.widthPixels
+        val height = service.resources.displayMetrics.heightPixels
+        val px = (point.x * width).toFloat()
+        val py = (point.y * height).toFloat()
         val path = Path().apply {
-            val width = service.resources.displayMetrics.widthPixels
-            val height = service.resources.displayMetrics.heightPixels
-            moveTo((point.x * width).toFloat(), (point.y * height).toFloat())
+            moveTo(px, py)
+            if (tapStyleIndex > 0) {
+                // 样式 1/2 追加微小位移，避免零长度手势被 OEM 输入管线丢弃
+                val drift = if (tapStyleIndex == 1) 6f else 3f
+                lineTo(px + drift, py + drift)
+            }
         }
-        val stroke = GestureDescription.StrokeDescription(path, 0, 60)
+        val duration = when (tapStyleIndex) {
+            1 -> 150L
+            2 -> 400L
+            else -> 60L
+        }
+        val stroke = GestureDescription.StrokeDescription(path, 0, duration)
         val gesture = GestureDescription.Builder().addStroke(stroke).build()
         val accepted = service.dispatchGesture(gesture, object : AccessibilityService.GestureResultCallback() {
             override fun onCompleted(gestureDescription: GestureDescription?) {
                 gestureCallbackReceived = true
                 cancelGestureTimeout()
-                Log.d(TAG, "tap onCompleted: stage=$nextStage")
+                Log.d(TAG, "tap onCompleted: stage=$nextStage style=$tapStyleIndex")
                 completeTap(nextStage, message, plan, pendingIndex, completedRounds)
             }
             override fun onCancelled(gestureDescription: GestureDescription?) {
@@ -797,7 +862,7 @@ class QiyuCoordinateAutomation(
                 fail("坐标点击未被系统接受")
             }
         }, null)
-        Log.d(TAG, "tap: dispatchGesture accepted=$accepted stage=$nextStage retry=$gestureRetryCount")
+        Log.d(TAG, "tap: dispatchGesture accepted=$accepted stage=$nextStage style=$tapStyleIndex duration=${duration}ms px=(${px.toInt()}, ${py.toInt()}) retry=$gestureRetryCount")
         if (!accepted) {
             fail("系统拒绝坐标点击请求")
             return
@@ -869,7 +934,13 @@ class QiyuCoordinateAutomation(
     }
 
     private fun unknown(page: Page) {
-        fail(if (page == Page.UNKNOWN) "截图不属于已知奇遇页面，已立即停止" else "页面阶段不符合预期：$page")
+        fail(
+            if (page == Page.UNKNOWN) "截图不属于已知奇遇页面，已立即停止"
+            else "页面阶段不符合预期：$page" +
+                (if (tapEscalationLeft <= 0 && lastTapAction != null) {
+                    "（多种点击手势样式均未生效，dispatchGesture 通道疑似被拦截，建议评估 Shizuku input 通道）"
+                } else "")
+        )
     }
 
     private fun stageLabel(stage: Stage): String = when (stage) {
