@@ -1,5 +1,6 @@
 package com.aoshi.auto_mobile
 
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.provider.Settings
@@ -112,9 +113,14 @@ class MainActivity : FlutterActivity() {
 
     /**
      * 检查无障碍服务是否已启用
+     *
+     * 注意：Settings.Secure 中存储的组件名可能是短格式
+     * （如 `com.aoshi.auto_mobile/.automation.AoshiAccessibilityService`，系统设置页写入或
+     * AccessibilityManagerService 规范化后均是如此），不能与全限定名做字符串等值比较——
+     * 那样在该设备上永远匹配失败。必须用 ComponentName.unflattenFromString 归一化后再比较。
      */
     private fun isAccessibilityServiceEnabled(): Boolean {
-        val expectedComponentName = "${packageName}/${AoshiAccessibilityService::class.java.canonicalName}"
+        val expectedComponent = ComponentName(this, AoshiAccessibilityService::class.java)
         var accessibilityEnabled = 0
 
         try {
@@ -126,20 +132,20 @@ class MainActivity : FlutterActivity() {
             return false
         }
 
-        if (accessibilityEnabled == 1) {
-            val settingValue = Settings.Secure.getString(
-                contentResolver,
-                Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
-            ) ?: return false
+        if (accessibilityEnabled != 1) return false
 
-            val splitter = TextUtils.SimpleStringSplitter(':')
-            splitter.setString(settingValue)
-            
-            while (splitter.hasNext()) {
-                val componentName = splitter.next()
-                if (expectedComponentName.equals(componentName, ignoreCase = true)) {
-                    return true
-                }
+        val settingValue = Settings.Secure.getString(
+            contentResolver,
+            Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
+        ) ?: return false
+
+        val splitter = TextUtils.SimpleStringSplitter(':')
+        splitter.setString(settingValue)
+
+        while (splitter.hasNext()) {
+            val component = ComponentName.unflattenFromString(splitter.next().trim())
+            if (component != null && component == expectedComponent) {
+                return true
             }
         }
 

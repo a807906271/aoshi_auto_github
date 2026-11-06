@@ -96,3 +96,7 @@ coverage/
 *.*~
 /evidence
 /app-release.apk
+
+# 调试产物与本地记忆（不入库）
+/logs/
+.workbuddy/
